@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { HelperError } from '../src/errors.js'
-import { createHelperRunner, resolveHelperPath } from '../src/helper.js'
+import { createSpawnRunner, resolveHelperPath } from '../src/helper.js'
 
 let directory: string
 
@@ -18,22 +18,22 @@ beforeAll(() => {
   directory = mkdtempSync(join(tmpdir(), 'helper-test-'))
 })
 
-describe('createHelperRunner', () => {
+describe('createSpawnRunner', () => {
   it('reicht die Payload über stdin und liest JSON von stdout', async () => {
     const path = writeFakeHelper('echo-helper', 'cat > /dev/null; echo "{\\"ok\\":true}"')
-    const result = await createHelperRunner(path).run('list-calendars', {})
+    const result = await createSpawnRunner(path).run('list-calendars', {})
     expect(result).toEqual({ ok: true })
   })
 
   it('übergibt das Kommando als erstes Argument', async () => {
     const path = writeFakeHelper('arg-helper', 'cat > /dev/null; echo "{\\"command\\":\\"$1\\"}"')
-    const result = await createHelperRunner(path).run('list-events', {})
+    const result = await createSpawnRunner(path).run('list-events', {})
     expect(result).toEqual({ command: 'list-events' })
   })
 
   it('überträgt Umlaute unbeschädigt über stdin', async () => {
     const path = writeFakeHelper('stdin-helper', 'cat')
-    const result = await createHelperRunner(path).run('create-event', { notes: 'Grüße äöüß' })
+    const result = await createSpawnRunner(path).run('create-event', { notes: 'Grüße äöüß' })
     expect(result).toEqual({ notes: 'Grüße äöüß' })
   })
 
@@ -42,7 +42,7 @@ describe('createHelperRunner', () => {
       'fail-helper',
       'cat > /dev/null; echo "{\\"code\\":\\"CALENDAR_READONLY\\",\\"message\\":\\"Kalender X\\"}" >&2; exit 1',
     )
-    await expect(createHelperRunner(path).run('create-event', {})).rejects.toMatchObject({
+    await expect(createSpawnRunner(path).run('create-event', {})).rejects.toMatchObject({
       code: 'CALENDAR_READONLY',
       message: 'Kalender X',
     })
@@ -50,20 +50,20 @@ describe('createHelperRunner', () => {
 
   it('meldet HELPER_CRASHED, wenn stderr kein JSON enthält', async () => {
     const path = writeFakeHelper('garbage-helper', 'cat > /dev/null; echo "Segmentation fault" >&2; exit 139')
-    await expect(createHelperRunner(path).run('list-events', {})).rejects.toMatchObject({
+    await expect(createSpawnRunner(path).run('list-events', {})).rejects.toMatchObject({
       code: 'HELPER_CRASHED',
     })
   })
 
   it('meldet HELPER_CRASHED, wenn stdout kein JSON enthält', async () => {
     const path = writeFakeHelper('noise-helper', 'cat > /dev/null; echo "kein json"')
-    await expect(createHelperRunner(path).run('list-events', {})).rejects.toMatchObject({
+    await expect(createSpawnRunner(path).run('list-events', {})).rejects.toMatchObject({
       code: 'HELPER_CRASHED',
     })
   })
 
   it('meldet HELPER_MISSING, wenn das Binary fehlt', async () => {
-    const runner = createHelperRunner(join(directory, 'existiert-nicht'))
+    const runner = createSpawnRunner(join(directory, 'existiert-nicht'))
     await expect(runner.run('list-calendars', {})).rejects.toBeInstanceOf(HelperError)
     await expect(runner.run('list-calendars', {})).rejects.toMatchObject({ code: 'HELPER_MISSING' })
   })
@@ -77,7 +77,7 @@ describe('createHelperRunner', () => {
     // als "Hilfsprogramm unerwartet beendet (EPIPE)" gemeldet.
     const path = writeFakeHelper('no-stdin-read-helper', 'echo "{\\"ok\\":true}"; exit 0')
     const largePayload = { notes: 'x'.repeat(2_000_000) }
-    const result = await createHelperRunner(path).run('check-access', largePayload)
+    const result = await createSpawnRunner(path).run('check-access', largePayload)
     expect(result).toEqual({ ok: true })
   })
 
@@ -89,15 +89,15 @@ describe('createHelperRunner', () => {
     // dieses Promise abzulehnen.
     const path = writeFakeHelper('no-stdin-no-output-helper', 'exit 1')
     const largePayload = { notes: 'x'.repeat(2_000_000) }
-    await expect(createHelperRunner(path).run('check-access', largePayload)).rejects.toBeInstanceOf(HelperError)
+    await expect(createSpawnRunner(path).run('check-access', largePayload)).rejects.toBeInstanceOf(HelperError)
   })
 
   it('meldet einen HelperError, wenn spawn selbst fehlschlaegt (nicht ausfuehrbar)', async () => {
     const path = join(directory, 'not-executable-helper')
     writeFileSync(path, '#!/usr/bin/env bash\necho "{}"\n')
     chmodSync(path, 0o644)
-    await expect(createHelperRunner(path).run('list-calendars', {})).rejects.toBeInstanceOf(HelperError)
-    await expect(createHelperRunner(path).run('list-calendars', {})).rejects.toMatchObject({
+    await expect(createSpawnRunner(path).run('list-calendars', {})).rejects.toBeInstanceOf(HelperError)
+    await expect(createSpawnRunner(path).run('list-calendars', {})).rejects.toMatchObject({
       code: expect.any(String),
     })
   })

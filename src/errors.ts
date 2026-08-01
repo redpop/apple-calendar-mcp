@@ -23,6 +23,7 @@ const MESSAGES: Record<string, string> = {
   HELPER_MISSING:
     'Das Hilfsprogramm bin/calendar-helper wurde nicht gefunden. Baue es einmalig mit "npm run build:helper".',
   HELPER_CRASHED: 'Das Hilfsprogramm wurde unerwartet beendet.',
+  HELPER_TIMEOUT: 'Das Hilfsprogramm hat nicht rechtzeitig geantwortet.',
 }
 
 const FALLBACK = 'Beim Zugriff auf den Kalender ist ein unerwarteter Fehler aufgetreten.'

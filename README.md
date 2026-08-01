@@ -10,23 +10,87 @@ macOS-specific. There is no Windows or Linux support and none is planned.
 
 The server runs entirely on your machine. It never talks to a network
 service — every request goes straight to the local Calendar database through
-a small Swift helper binary.
+a small Swift helper, reached over a Unix domain socket.
 
 ## Architecture
 
-The project has two layers:
+The project has three parts:
 
-- **`swift/main.swift`** — a Swift command-line tool that wraps EventKit. It
-  is invoked once per request ("one-shot" process model, not a long-running
-  daemon) with a single subcommand and, where needed, a JSON payload on
-  stdin. It prints a JSON result to stdout on success (exit code 0) or a
-  JSON error object `{"code": ..., "message": ...}` to stderr (exit code 1)
-  on failure. It never touches stdout except for that one JSON reply, and it
-  can only be called with hardcoded arguments — it has no other externally
-  reachable behavior.
-- **`src/`** — a TypeScript MCP server that spawns the Swift helper as a
-  child process for every tool call, validates its JSON with
-  [Zod](https://zod.dev), and exposes four MCP tools to the client.
+- **`swift/main.swift`** — a Swift command-line tool that wraps EventKit. Most
+  of its subcommands (`check-access`, `list-calendars`, `list-events`,
+  `create-event`) are one-shot: invoked with a single subcommand and, where
+  needed, a JSON payload on stdin, they print a JSON result to stdout on
+  success (exit code 0) or a JSON error object `{"code": ..., "message":
+  ...}` to stderr (exit code 1) on failure. The `serve` subcommand is
+  different: it stays running as a long-lived daemon, listening on a Unix
+  domain socket and handling one JSON request per connection in the same
+  `{"command": ..., "payload": ...}` / `{"ok": ..., ...}` shape. Either way,
+  it never touches stdout except for that one JSON reply, and it can only be
+  invoked with hardcoded arguments — it has no other externally reachable
+  behavior.
+- **`launchagent/`** — install/uninstall scripts that register `calendar-helper
+  serve` as a per-user LaunchAgent, so it starts automatically at login and
+  is restarted if it dies. This is not an optional convenience layer; see
+  "Why a LaunchAgent" below for why it's required.
+- **`src/`** — a TypeScript MCP server that, for every tool call, connects to
+  the helper's Unix socket (`src/socketRunner.ts`) and falls back to spawning
+  the helper binary directly (`src/helper.ts`) only if the socket isn't
+  reachable. It validates the helper's JSON with [Zod](https://zod.dev) and
+  exposes four MCP tools to the client.
+
+## Why a LaunchAgent, not a spawned child process
+
+Earlier versions of this project spawned `bin/calendar-helper` as a child
+process of the MCP server for every request. **That does not work under
+Claude Desktop, and it cannot be made to work.** Two independent macOS
+mechanisms rule it out:
+
+**1. TCC grants calendar access to the responsible parent process, not to
+the binary that actually calls EventKit.** When a sandboxed or unentitled
+process asks for calendar access, macOS attributes the request to whichever
+app is ultimately responsible for having launched it — and it looks up that
+app's usage-description string to decide whether to even show a dialog.
+Claude Desktop declares no calendar usage description anywhere in its app
+bundle (verified by inspecting every `Info.plist` inside
+`/Applications/Claude.app`). That means anything Claude Desktop spawns is
+permanently denied calendar access: no dialog appears, no entry shows up in
+System Settings, and there is no switch to flip — short of Anthropic adding
+that usage description to Claude Desktop itself, there is nothing this
+project can do about it from the child-process side. This was confirmed
+directly: called from a Claude-Desktop-spawned child process, the binary
+returns `PERMISSION_DENIED`; the very same process, going through the socket
+instead, reaches all six calendars.
+
+Running the helper under `launchd` instead sidesteps the problem entirely —
+`launchd` is the helper's responsible process, so it gets its own TCC
+identity. It asks for access under its own name and shows up as
+`calendar-helper` in System Settings → Privacy & Security → Calendars, with
+its own dialog and its own grant. The MCP server then reaches it as a client
+over a Unix socket rather than launching it.
+
+**2. Code signing determines whether the grant survives a rebuild.** With
+ad-hoc signing (`codesign --sign -`), macOS binds the grant to the code
+hash, which changes on every build — so a rebuilt binary looks like a
+different, ungranted program, and macOS refuses it *silently*, without ever
+offering a dialog. With a Developer ID certificate, the grant binds to
+bundle ID + team ID instead, so it survives rebuilds and even a later
+certificate renewal. `swift/build.sh` picks whichever is available: it uses
+a Developer ID identity automatically if one is installed
+(`security find-identity -v -p codesigning`), and falls back to ad-hoc
+signing otherwise. Most readers of this README will not have a Developer ID
+certificate, so both paths matter — see "Granting calendar access" below for
+what each implies in practice.
+
+**3. Hardened runtime requires an explicit calendar entitlement.** Developer
+ID signing, as used here, enables the hardened runtime (and notarization
+would require it too). With hardened runtime on, macOS demands the
+`com.apple.security.personal-information.calendars` entitlement before it
+will even consider a calendar request — without it, the request is refused
+with no dialog at all, even immediately after a `tccutil reset`.
+`swift/calendar-helper.entitlements` declares exactly that one entitlement.
+One easy-to-hit trap: the entitlements plist must contain **no XML
+comments** — Apple's AMFI parser rejects them with a syntax error, not a
+helpful message.
 
 ## Requirements
 
@@ -41,55 +105,48 @@ The project has two layers:
 ```bash
 npm install
 npm run build
-npm run build:helper
+./swift/build.sh
+bash launchagent/install.sh
 ```
 
-`npm run build` compiles the TypeScript server to `dist/`. `npm run
-build:helper` compiles and ad-hoc-signs the Swift helper to
-`bin/calendar-helper` (see `swift/build.sh`).
+`npm run build` compiles the TypeScript server to `dist/`. `./swift/build.sh`
+compiles the Swift helper to `bin/calendar-helper`, signing it with a
+Developer ID identity if one is installed and falling back to ad-hoc signing
+otherwise (see "Why a LaunchAgent" above). `bash launchagent/install.sh`
+copies that binary to a stable location outside the repo
+(`~/Library/Application Support/apple-calendar-mcp/calendar-helper` — see
+"Installed layout" below), writes and loads a LaunchAgent that runs it as
+`calendar-helper serve`, and waits (up to 10 seconds) for its Unix socket to
+appear.
+
+On first install — or the first run after an ad-hoc-signed rebuild — macOS
+shows a calendar-access dialog under the name **calendar-helper**. Approve
+it (with "Full Access", not "Add Only" — see below). Once the script reports
+the socket is up:
+
+1. **Configure Claude Desktop** (see below), making sure Claude Desktop is
+   quit while you edit its config file.
+2. **Restart Claude Desktop.**
+
+To remove the LaunchAgent again, run `bash launchagent/uninstall.sh`. It
+unloads the service and deletes the plist and socket; it does **not** revoke
+the calendar grant itself, since that's tied to the binary's code identity,
+not to the LaunchAgent registration (see "Resetting calendar access" below).
+
+**After changing the Swift source:** rerun `./swift/build.sh && bash
+launchagent/install.sh`. With a Developer ID certificate, the existing grant
+survives this — you won't be prompted again. With ad-hoc signing, expect a
+fresh dialog every time, since the rebuilt binary has a new code hash.
 
 ## Granting calendar access (read this before configuring Claude Desktop)
 
-This is the section most likely to trip you up, so read it in full before
-wiring the server into Claude Desktop.
+### The two grant levels (macOS 14+)
 
-### Step 1: trigger the permission dialog from your own terminal
-
-Run this from your own interactive Terminal (or iTerm) window — not from a
-background process, a script runner, or anything without a visible window:
-
-```bash
-./bin/calendar-helper check-access
-```
-
-On the first run, macOS shows the calendar-access dialog. Approve it. On
-success you get:
-
-```json
-{"status":"authorized"}
-```
-
-on stdout with exit code 0. If you deny it, or if it was already denied
-earlier, you get a JSON error on stderr (`PERMISSION_DENIED` or
-`PERMISSION_RESTRICTED`) and exit code 1.
-
-**Why do this first, and from your own terminal?** macOS's privacy system
-(TCC) grants calendar access to the *responsible parent process* — the app
-that ultimately launched the helper — not to the helper binary itself. If
-you run `check-access` from your interactive Terminal first, the grant
-attaches to Terminal. If a background or non-interactive process makes the
-first request, macOS can silently refuse it without ever showing a dialog —
-and that refusal then sticks, forcing you to reset it before trying again.
-Doing this step manually, first, in a normal terminal session sidesteps that
-trap entirely.
-
-### Step 2: understand the two grant levels (macOS 14+)
-
-Open **System Settings → Privacy & Security → Calendars**. You will **not**
-see an entry named `calendar-helper` there — you will see *Terminal*
-(or *iTerm*, or later, *Claude*), because, as above, the grant belongs to the
-parent process, not the helper binary. Do not go looking for the helper's
-own name in this list; it will never appear.
+Open **System Settings → Privacy & Security → Calendars**. You should see an
+entry named **calendar-helper** — this is new; older versions of this
+project showed *Terminal* or *Claude* here instead, because the grant used
+to belong to whichever app launched the helper. Now that the helper runs
+under `launchd`, it has its own entry.
 
 macOS 14+ distinguishes two access levels for each app in that list. **The
 on/off toggle next to the app's name does not expose this choice at all** —
@@ -100,11 +157,10 @@ is set to German) next to the app's entry. Clicking it opens a small dialog
 offering exactly two choices:
 
 - **"Add Only"** ("Zugriff nur zum Hinzufügen" in German) — the app can
-  create events but cannot read existing ones. The helper reports this as
-  `writeOnly` in older builds; the current build treats it the same as no
-  access and returns a `PERMISSION_DENIED` error, because every one of this
-  server's tools needs to read (even `create_event` needs to look up
-  calendars first).
+  create events but cannot read existing ones. This server treats it the
+  same as no access and returns a `PERMISSION_DENIED` error, because every
+  one of this server's tools needs to read (even `create_event` needs to
+  look up calendars first).
 - **"Full Access"** ("Vollzugriff auf Kalender" in German) — required for
   everything this server does.
 
@@ -113,19 +169,18 @@ concludes access is granted, and doesn't think to look for a second,
 separate control — then gets a confusing `PERMISSION_DENIED` from a tool
 that appears to already have permission. If you get a permission error even
 though you granted *something*, this is the first thing to check: open
-**Options…** ("Optionen …") next to the relevant app's entry and confirm
+**Options…** ("Optionen …") next to **calendar-helper**'s entry and confirm
 "Full Access" / "Vollzugriff auf Kalender" is selected, not "Add Only".
 
-### Step 3: Claude Desktop needs its own, separate grant
+### Why you will never see a dialog from Claude Desktop itself
 
-Permission granted to Terminal does **not** carry over to Claude Desktop.
-Once you launch the server from Claude Desktop, macOS will prompt again (or,
-if `check-access` was already run once from Terminal so the binary is
-signed and known, you may need to open **System Settings → Privacy &
-Security → Calendars** and grant access to *Claude* explicitly). Running
-`check-access` from your own terminal first, as in Step 1, is still the
-right order of operations — it lets you confirm the helper itself works
-before adding Claude Desktop's process boundary into the mix.
+This is deliberate, not a bug to work around: Claude Desktop cannot obtain
+calendar access, under any configuration, because it declares no calendar
+usage description in its app bundle. If you ever find yourself digging
+through Claude Desktop's own entry in System Settings looking for a
+calendar toggle, stop — it isn't there, and it never will be until Claude
+Desktop's own `Info.plist` changes. The LaunchAgent exists specifically to
+route around this; see "Why a LaunchAgent" above.
 
 ## Configuring Claude Desktop
 
@@ -144,15 +199,27 @@ Add the server to
 ```
 
 Replace the path with the absolute path to `dist/index.js` in *your* clone
-of this repository. Then **restart Claude Desktop** — it only reads this
-file on startup.
+of this repository.
+
+**Quit Claude Desktop before editing this file, not after.** Claude Desktop
+rewrites `claude_desktop_config.json` on exit, so if it's still running
+while you edit it, your changes get silently overwritten the next time it
+quits. Quit it first (Cmd+Q), edit the file, then start Claude Desktop again
+— it only reads this file on startup.
+
+The MCP server itself talks to the calendar helper over the Unix socket
+described above; it does not need calendar access itself, only permission to
+connect to a local socket file, which every process has.
 
 ## CLI reference
 
-Every command is a standalone subcommand of `bin/calendar-helper`. Payloads
-go in on stdin as JSON; the result comes out on stdout as JSON. These are
-useful for verifying the helper works before wiring it into an MCP client,
-and for debugging.
+Every command below is a standalone subcommand of `bin/calendar-helper`. The
+first four are one-shot: a payload goes in on stdin as JSON, and the result
+comes out on stdout as JSON. `serve`, covered last, is different — it's the
+long-running daemon. These are useful for verifying the helper works before
+wiring it into an MCP client, and for debugging — though under normal
+operation you won't run any of them directly, since
+`launchagent/install.sh` starts and manages `serve` for you.
 
 ### `check-access`
 
@@ -204,6 +271,22 @@ Creates a new event and returns `{"event": {...}}` in the same shape as
 used. Writing to a read-only calendar (for example a subscribed holiday
 calendar) fails with `CALENDAR_READONLY`. See the all-day alarm rule below
 for what happens with `allDay: true`.
+
+### `serve`
+
+```bash
+./bin/calendar-helper serve [--socket /custom/path]
+```
+
+Not one-shot: runs as a long-lived daemon, listening on a Unix domain socket
+(default `~/Library/Application Support/apple-calendar-mcp/helper.sock`,
+overridable with `--socket`) and handling one JSON request per connection.
+Before it starts listening, it checks calendar access once, waiting up to 30
+seconds for a decision; if nothing arrives in that window it exits with
+`PERMISSION_TIMEOUT` rather than hanging forever with no explanation. This
+is what `launchagent/install.sh` registers as a LaunchAgent — see
+"Why a LaunchAgent" above for why this exists as a daemon at all rather than
+a one-shot command like the others.
 
 ## MCP tools
 
@@ -341,37 +424,79 @@ assuming this server is at fault. (Worth noting: BusyCal's own default for
 all-day events is likewise 09:00 — the same convention this server
 implements, for the same reason: it matches what Calendar.app itself does.)
 
+## Installed layout
+
+The socket-serving binary is installed to
+`~/Library/Application Support/apple-calendar-mcp/calendar-helper` —
+deliberately outside the repo, copied there by `launchagent/install.sh`. This
+is not just tidiness: a LaunchAgent that pointed at `bin/calendar-helper`
+inside your checkout would break the moment you moved the project or ran `git
+clean` on `bin/`. The LaunchAgent plist itself lives at
+`~/Library/LaunchAgents/io.github.apple-calendar-mcp.helper.plist`, its log
+at `~/Library/Logs/apple-calendar-mcp.log`, and the socket at
+`~/Library/Application Support/apple-calendar-mcp/helper.sock` (mode `0600`,
+owner-only — overridable on the Node side with the `APPLE_CALENDAR_SOCKET`
+environment variable). None of this depends on where you cloned the repo.
+
 ## Troubleshooting
 
-**The permission dialog reappears after every rebuild.** The ad-hoc code
-signature is missing, or the bundle identifier changed between builds.
-Check with:
+**The log is the first place to look.** Every message from the daemon —
+started, waiting for calendar access, granted, listening, `serve` errors —
+goes to `~/Library/Logs/apple-calendar-mcp.log`, because that's what
+`launchagent/install.sh` points `StandardOutPath`/`StandardErrorPath` at.
+`tail -f` it while you install or restart the service.
+
+**`PERMISSION_TIMEOUT` vs. `PERMISSION_DENIED` — read the log to tell them
+apart.** `serve` checks calendar access once at startup and waits up to 30
+seconds for an answer. If nothing arrives in that window (typically: the
+approval dialog never appeared, or appeared behind another window and
+nobody clicked it) it exits with `PERMISSION_TIMEOUT` — "no answer came." If
+you explicitly deny the dialog, or access was already denied before, it
+exits with `PERMISSION_DENIED` — "the answer was no." These need different
+fixes: a timeout usually means look for the dialog and click it (or restart
+the LaunchAgent so it asks again); a denial means go fix the grant in System
+Settings. Distinguishing the two was what made the whole responsible-process
+issue diagnosable in the first place — don't skip reading the log just
+because both look like "it's not working."
+
+**The dialog reappears on every rebuild, or access is silently refused with
+no dialog at all.** Expected with ad-hoc signing — see "Why a LaunchAgent"
+above. Check which signing path your build took:
 
 ```bash
-codesign -dv bin/calendar-helper
+codesign -dv "$HOME/Library/Application Support/apple-calendar-mcp/calendar-helper"
 ```
 
-You should see `Identifier=io.github.apple-calendar-mcp.calendar-helper`.
-`swift/build.sh` signs the binary with a fixed identifier specifically so
-that TCC's grant survives rebuilds; if this doesn't match, rerun `npm run
-build:helper` and check the script hasn't been edited.
+`Identifier=io.github.apple-calendar-mcp.calendar-helper` is set either way.
+What matters is whether a `TeamIdentifier` line is also present: if it is,
+you're on the Developer ID path and the grant should survive rebuilds; if
+there's no `TeamIdentifier` line (or it says `not set`), you're on ad-hoc
+signing, and re-granting after every `./swift/build.sh` is expected
+behavior, not a bug — get a Developer ID certificate if you want it to stop.
 
-**`HELPER_MISSING` error.** `npm run build:helper` was never run, or
-`bin/calendar-helper` was deleted. Run it (see Installation above).
+**`HELPER_MISSING` from the MCP server.** The Node layer couldn't reach the
+socket *and* couldn't find a binary to spawn as a fallback. Either
+`launchagent/install.sh` was never run (or the LaunchAgent isn't loaded —
+check `launchctl print gui/$UID/io.github.apple-calendar-mcp.helper`), or,
+for the spawn fallback specifically, `./swift/build.sh` was never run and
+`bin/calendar-helper` doesn't exist in the repo. Note that even a working
+spawn fallback only helps under a parent process that already holds the
+grant (e.g. a terminal) — under Claude Desktop it will still fail with
+`PERMISSION_DENIED`, because it hits exactly the problem this whole
+LaunchAgent setup exists to avoid.
 
-**Claude Desktop doesn't show the tools.** Double-check the absolute path
-in `claude_desktop_config.json` actually points at `dist/index.js` in this
-checkout, and that you fully restarted Claude Desktop (quit, not just
-closed the window) after editing the config.
+**Claude Desktop doesn't show the tools, or your config edits keep
+disappearing.** Double-check the absolute path in
+`claude_desktop_config.json` actually points at `dist/index.js` in this
+checkout. If edits to the file keep reverting, you edited it while Claude
+Desktop was still running — quit it first (see "Configuring Claude Desktop"
+above), then edit, then start it. Either way, a full restart (quit, not just
+closed the window) is required after any config change.
 
-**Access denied in Claude Desktop even though Terminal has it.** See "Claude
-Desktop needs its own, separate grant" above — grant Claude access
-independently under System Settings → Privacy & Security → Calendars.
-
-**`PERMISSION_DENIED` even though the toggle for Terminal/Claude is already
-ON.** The toggle only means "some access," not "full access" — see "Step 2:
-understand the two grant levels" above. Open **Options…** ("Optionen …")
-next to that app's entry in System Settings → Privacy & Security →
+**`PERMISSION_DENIED` even though the toggle for calendar-helper is already
+ON.** The toggle only means "some access," not "full access" — see "The two
+grant levels" above. Open **Options…** ("Optionen …") next to
+**calendar-helper**'s entry in System Settings → Privacy & Security →
 Calendars and confirm it's set to "Full Access" / "Vollzugriff auf
 Kalender", not "Add Only" / "Zugriff nur zum Hinzufügen".
 
@@ -381,12 +506,21 @@ calendar store — it is adding its own default alarm on top of the one this
 server set. See "All-day events and the alarm rule" above; it is not a bug
 in this server.
 
-**Do not try `tccutil reset Calendar io.github.apple-calendar-mcp.calendar-helper`.**
-It fails with `No such bundle identifier ... (OSStatus error -10814)`,
-because — as above — the grant belongs to the parent process (Terminal /
-Claude), not to this bundle identifier. If you need to reset access, reset
-it for the parent app instead (e.g. `tccutil reset Calendar
-com.apple.Terminal`), or use System Settings directly.
+**Resetting calendar access.** `tccutil reset Calendar
+io.github.apple-calendar-mcp.calendar-helper` does not work — command-line
+tools can't be targeted individually this way, so it fails with `No such
+bundle identifier ... (OSStatus error -10814)` regardless of how the binary
+is signed. The only reset available for a command-line tool is the blunt
+one with no bundle ID argument at all:
+
+```bash
+tccutil reset Calendar
+```
+
+This clears calendar permission for **every** app on the system, not just
+this one — there is no narrower option. Otherwise, use System Settings →
+Privacy & Security → Calendars directly, and remove just the
+**calendar-helper** entry.
 
 ## Scope
 
@@ -403,7 +537,7 @@ querying other people's availability, and any platform other than macOS.
 npm run typecheck   # tsc --noEmit
 npm test            # vitest run
 npm run build       # compile TypeScript to dist/
-npm run build:helper  # compile + ad-hoc-sign the Swift helper
+npm run build:helper  # compile + sign the Swift helper (equivalent to ./swift/build.sh)
 ```
 
 The test suite (`tests/`) covers the TypeScript layer only — schemas, the

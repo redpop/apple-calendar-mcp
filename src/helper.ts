@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { HelperError } from './errors.js'
+import { resolveSocketPath, runSocketRequest, SOCKET_TIMEOUT_MS, SocketConnectError } from './socketRunner.js'
 
 export interface HelperRunner {
   run(command: string, payload: Record<string, unknown>): Promise<unknown>
@@ -17,7 +18,15 @@ export function resolveHelperPath(): string {
   return fileURLToPath(new URL('../bin/calendar-helper', import.meta.url))
 }
 
-export function createHelperRunner(helperPath: string = resolveHelperPath()): HelperRunner {
+/**
+ * Reiner Spawn-Transport: startet das Swift-Binary als Kindprozess je
+ * Aufruf. Funktioniert nur, wenn der Elternprozess selbst die
+ * Kalender-Berechtigung haelt (z. B. ein Terminal) — unter Claude Desktop
+ * liefert er zuverlaessig PERMISSION_DENIED, weil die Berechtigung dem
+ * verantwortlichen Elternprozess zugeordnet wird, nicht dem Binary. Bleibt
+ * unveraendert gegenueber dem Verhalten vor der Socket-Umstellung.
+ */
+export function createSpawnRunner(helperPath: string = resolveHelperPath()): HelperRunner {
   return {
     run(command, payload) {
       return new Promise((resolve, reject) => {
@@ -96,6 +105,44 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
         // Anfuehrungszeichen und Zeilenumbruechen in Notizen.
         child.stdin.end(JSON.stringify(payload))
       })
+    },
+  }
+}
+
+/**
+ * Waehlt den Transport pro Aufruf neu, statt einmalig bei der Konstruktion:
+ * ein Socket-Verbindungsversuch schlaegt fehl, ohne einen Prozess zu
+ * belasten (kein Listener/keine Datei -> sofortiges ENOENT/ECONNREFUSED),
+ * also ist der Preis eines Versuchs pro Aufruf vernachlaessigbar gegenueber
+ * dem Risiko, sich einmalig fuer spawn zu entscheiden und dabei stecken zu
+ * bleiben: startet der Agent-Host (und damit dieser Prozess) vor dem
+ * LaunchAgent-Daemon, wuerde eine Einmal-Entscheidung fuer immer auf spawn
+ * ausweichen — also fuer immer PERMISSION_DENIED unter Claude Desktop
+ * liefern, obwohl der Daemon kurz danach laengst lauscht. Pro-Aufruf-Auswahl
+ * erholt sich davon beim naechsten Tool-Aufruf von selbst, ganz ohne
+ * Neustart-Logik.
+ *
+ * Sobald eine Socket-Verbindung zustande kommt, wird sie nicht mehr
+ * verlassen: ein Timeout, eine kaputte Zeile oder ein strukturierter Fehler
+ * vom Daemon werden direkt durchgereicht statt auf spawn auszuweichen — ein
+ * Doppel-Versuch nach erfolgreichem Verbindungsaufbau koennte eine
+ * nebenwirkungsbehaftete Anfrage (z. B. create-event) zweimal ausloesen.
+ */
+export function createHelperRunner(
+  helperPath: string = resolveHelperPath(),
+  socketPath: string = resolveSocketPath(),
+): HelperRunner {
+  const spawnRunner = createSpawnRunner(helperPath)
+  return {
+    async run(command, payload) {
+      try {
+        return await runSocketRequest(socketPath, command, payload, SOCKET_TIMEOUT_MS)
+      } catch (error) {
+        if (error instanceof SocketConnectError) {
+          return spawnRunner.run(command, payload)
+        }
+        throw error
+      }
     },
   }
 }
