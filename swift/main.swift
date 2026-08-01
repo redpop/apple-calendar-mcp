@@ -127,6 +127,51 @@ func commandCheckAccess() -> Never {
     emit(["status": label])
 }
 
+// MARK: - Kalender
+
+func hexColor(_ color: CGColor?) -> Any {
+    guard let color = color,
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let converted = color.converted(to: space, intent: .defaultIntent, options: nil),
+          let components = converted.components, components.count >= 3 else {
+        return NSNull()
+    }
+    let channel = { (value: CGFloat) -> Int in Int((min(max(value, 0), 1) * 255).rounded()) }
+    return String(format: "#%02X%02X%02X", channel(components[0]), channel(components[1]), channel(components[2]))
+}
+
+func calendarTypeLabel(_ type: EKCalendarType) -> String {
+    switch type {
+    case .local: return "local"
+    case .calDAV: return "calDAV"
+    case .exchange: return "exchange"
+    case .subscription: return "subscription"
+    case .birthday: return "birthday"
+    @unknown default: return "unknown"
+    }
+}
+
+func serializeCalendar(_ calendar: EKCalendar) -> [String: Any] {
+    return [
+        "id": calendar.calendarIdentifier,
+        "title": calendar.title,
+        "type": calendarTypeLabel(calendar.type),
+        "source": calendar.source?.title ?? NSNull(),
+        "color": hexColor(calendar.cgColor),
+        "allowsModifications": calendar.allowsContentModifications,
+    ]
+}
+
+// MARK: - Kommando: list-calendars
+
+func commandListCalendars() -> Never {
+    let store = EKEventStore()
+    ensureAccess(store)
+    let calendars = store.calendars(for: .event)
+        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    emit(["calendars": calendars.map(serializeCalendar)])
+}
+
 // MARK: - Dispatch
 
 let arguments = CommandLine.arguments
@@ -137,6 +182,8 @@ guard arguments.count >= 2 else {
 switch arguments[1] {
 case "check-access":
     commandCheckAccess()
+case "list-calendars":
+    commandListCalendars()
 default:
     fail("INVALID_INPUT", "Unbekanntes Kommando: \(arguments[1])")
 }
