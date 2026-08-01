@@ -157,6 +157,122 @@ func commandListCalendars() -> Never {
     emit(["calendars": calendars.map(serializeCalendar)])
 }
 
+// MARK: - Events
+
+func eventStatusLabel(_ status: EKEventStatus) -> String {
+    switch status {
+    case .none: return "none"
+    case .confirmed: return "confirmed"
+    case .tentative: return "tentative"
+    case .canceled: return "canceled"
+    @unknown default: return "unknown"
+    }
+}
+
+/// Bildet das Ende eines ganztaegigen Events auf den letzten *enthaltenen* Tag ab.
+func inclusiveEndDay(_ end: Date) -> Date {
+    let calendar = Calendar.current
+    let parts = calendar.dateComponents([.hour, .minute, .second], from: end)
+    if parts.hour == 0 && parts.minute == 0 && parts.second == 0 {
+        return calendar.date(byAdding: .day, value: -1, to: end) ?? end
+    }
+    return end
+}
+
+func serializeEvent(_ event: EKEvent) -> [String: Any] {
+    let start = event.startDate ?? Date()
+    let end = event.endDate ?? start
+    let occurrence = event.occurrenceDate ?? start
+    let identifier = event.eventIdentifier ?? ""
+
+    var payload: [String: Any] = [
+        "id": "\(identifier)::\(isoOut.string(from: occurrence))",
+        "eventIdentifier": identifier,
+        "occurrenceDate": isoOut.string(from: occurrence),
+        "calendarId": event.calendar?.calendarIdentifier ?? "",
+        "calendarTitle": event.calendar?.title ?? "",
+        "title": event.title ?? "",
+        "start": isoOut.string(from: start),
+        "end": isoOut.string(from: end),
+        "allDay": event.isAllDay,
+        "startDay": NSNull(),
+        "endDay": NSNull(),
+        "location": event.location ?? NSNull(),
+        "notes": event.notes ?? NSNull(),
+        "url": event.url?.absoluteString ?? NSNull(),
+        "isRecurring": event.hasRecurrenceRules,
+        "status": eventStatusLabel(event.status),
+    ]
+
+    if event.isAllDay {
+        payload["startDay"] = dayFormatter.string(from: start)
+        payload["endDay"] = dayFormatter.string(from: inclusiveEndDay(end))
+    }
+
+    return payload
+}
+
+/// Loest Kalender-IDs auf. `nil` bedeutet: alle Kalender.
+func resolveCalendars(_ ids: Any?, store: EKEventStore) -> [EKCalendar]? {
+    guard let ids = ids as? [String], !ids.isEmpty else { return nil }
+    let all = store.calendars(for: .event)
+    var picked: [EKCalendar] = []
+    for id in ids {
+        guard let match = all.first(where: { $0.calendarIdentifier == id }) else {
+            fail("CALENDAR_NOT_FOUND", "Ein Kalender mit der ID '\(id)' existiert nicht.")
+        }
+        picked.append(match)
+    }
+    return picked
+}
+
+// MARK: - Kommando: list-events
+
+func commandListEvents() -> Never {
+    let payload = readPayload()
+    let store = EKEventStore()
+    ensureAccess(store)
+
+    let start = parseDate(payload["start"], field: "start")
+    let end = parseDate(payload["end"], field: "end")
+    guard end > start else {
+        fail("INVALID_INPUT", "'end' muss nach 'start' liegen.")
+    }
+
+    let calendars = resolveCalendars(payload["calendarIds"], store: store)
+
+    // events(matching:) liefert Wiederholungstermine bereits als expandierte Instanzen.
+    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
+    var events = store.events(matching: predicate)
+
+    if let rawQuery = payload["query"] as? String {
+        let needle = rawQuery.lowercased()
+        if !needle.isEmpty {
+            events = events.filter { event in
+                (event.title ?? "").lowercased().contains(needle)
+                    || (event.notes ?? "").lowercased().contains(needle)
+            }
+        }
+    }
+
+    events.sort { ($0.startDate ?? Date.distantPast) < ($1.startDate ?? Date.distantPast) }
+
+    // Erst filtern, dann zaehlen, dann begrenzen — totalMatched meint die
+    // Trefferzahl vor dem Abschneiden.
+    let totalMatched = events.count
+    var truncated = false
+    if let maxResults = payload["maxResults"] as? Int, maxResults >= 0, totalMatched > maxResults {
+        events = Array(events.prefix(maxResults))
+        truncated = true
+    }
+
+    emit([
+        "events": events.map(serializeEvent),
+        "totalMatched": totalMatched,
+        "truncated": truncated,
+    ])
+}
+
 // MARK: - Dispatch
 
 let arguments = CommandLine.arguments
@@ -169,6 +285,8 @@ case "check-access":
     commandCheckAccess()
 case "list-calendars":
     commandListCalendars()
+case "list-events":
+    commandListEvents()
 default:
     fail("INVALID_INPUT", "Unbekanntes Kommando: \(arguments[1])")
 }
