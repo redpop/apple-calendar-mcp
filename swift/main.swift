@@ -273,6 +273,79 @@ func commandListEvents() -> Never {
     ])
 }
 
+// MARK: - Kommando: create-event
+
+/// Calendar.app legt Erinnerungen ganztaegiger Termine immer auf 09:00 des
+/// gewaehlten Tages; "1 Tag vorher" ist dort TRIGGER:-PT15H (-24h + 9h).
+/// Ein reiner Minutenoffset wuerde stattdessen um Mitternacht ausloesen.
+func alarmOffset(minutesBefore: Int, allDay: Bool) -> TimeInterval {
+    if allDay {
+        let daysBefore = floor(Double(minutesBefore) / 1440.0)
+        return -(daysBefore * 86400) + 32400
+    }
+    return -(Double(minutesBefore) * 60)
+}
+
+func commandCreateEvent() -> Never {
+    let payload = readPayload()
+    let store = EKEventStore()
+    ensureAccess(store)
+
+    guard let title = (payload["title"] as? String), !title.isEmpty else {
+        fail("INVALID_INPUT", "Feld 'title' fehlt oder ist leer.")
+    }
+
+    let start = parseDate(payload["start"], field: "start")
+    let end = parseDate(payload["end"], field: "end")
+    guard end >= start else {
+        fail("INVALID_INPUT", "'end' darf nicht vor 'start' liegen.")
+    }
+
+    let calendar: EKCalendar
+    if let id = payload["calendarId"] as? String {
+        guard let match = store.calendars(for: .event).first(where: { $0.calendarIdentifier == id }) else {
+            fail("CALENDAR_NOT_FOUND", "Ein Kalender mit der ID '\(id)' existiert nicht.")
+        }
+        calendar = match
+    } else {
+        guard let fallback = store.defaultCalendarForNewEvents else {
+            fail("CALENDAR_NOT_FOUND", "Es ist kein Standardkalender für neue Termine konfiguriert.")
+        }
+        calendar = fallback
+    }
+
+    guard calendar.allowsContentModifications else {
+        fail("CALENDAR_READONLY", "Der Kalender '\(calendar.title)' erlaubt keine Änderungen.")
+    }
+
+    let allDay = (payload["allDay"] as? Bool) ?? false
+
+    let event = EKEvent(eventStore: store)
+    event.calendar = calendar
+    event.title = title
+    event.startDate = start
+    event.endDate = end
+    event.isAllDay = allDay
+
+    if let location = payload["location"] as? String { event.location = location }
+    if let notes = payload["notes"] as? String { event.notes = notes }
+    if let urlText = payload["url"] as? String, let url = URL(string: urlText) { event.url = url }
+
+    if let alarms = payload["alarmMinutesBefore"] as? [Int] {
+        for minutes in alarms {
+            event.addAlarm(EKAlarm(relativeOffset: alarmOffset(minutesBefore: minutes, allDay: allDay)))
+        }
+    }
+
+    do {
+        try store.save(event, span: .thisEvent, commit: true)
+    } catch {
+        fail("SAVE_FAILED", "Der Termin konnte nicht gespeichert werden: \(error.localizedDescription)")
+    }
+
+    emit(["event": serializeEvent(event)])
+}
+
 // MARK: - Dispatch
 
 let arguments = CommandLine.arguments
@@ -287,6 +360,8 @@ case "list-calendars":
     commandListCalendars()
 case "list-events":
     commandListEvents()
+case "create-event":
+    commandCreateEvent()
 default:
     fail("INVALID_INPUT", "Unbekanntes Kommando: \(arguments[1])")
 }
