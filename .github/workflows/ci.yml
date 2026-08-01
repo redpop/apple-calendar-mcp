@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+        env:
+          TZ: Europe/Berlin
+
+      - name: TypeScript build
+        run: npm run build
+
+      # Compiles and signs the Swift CLI. It cannot be run in CI: there is no
+      # calendar and no TCC permission available there.
+      - name: Build Swift helper
+        run: npm run build:helper
