@@ -67,6 +67,25 @@ describe('createHelperRunner', () => {
     await expect(runner.run('list-calendars', {})).rejects.toBeInstanceOf(HelperError)
     await expect(runner.run('list-calendars', {})).rejects.toMatchObject({ code: 'HELPER_MISSING' })
   })
+
+  it('faengt EPIPE ab, wenn der Helper beendet, bevor stdin gelesen wurde', async () => {
+    // Kein "cat" hier — der Helper liest stdin nie und beendet sich sofort,
+    // wie es check-access, list-calendars und der unbekannte-Kommando-Pfad
+    // im echten Swift-Binary tun.
+    const path = writeFakeHelper('no-stdin-read-helper', 'echo "{\\"ok\\":true}"; exit 0')
+    const largePayload = { notes: 'x'.repeat(2_000_000) }
+    await expect(createHelperRunner(path).run('check-access', largePayload)).rejects.toBeInstanceOf(HelperError)
+  })
+
+  it('meldet einen HelperError, wenn spawn selbst fehlschlaegt (nicht ausfuehrbar)', async () => {
+    const path = join(directory, 'not-executable-helper')
+    writeFileSync(path, '#!/usr/bin/env bash\necho "{}"\n')
+    chmodSync(path, 0o644)
+    await expect(createHelperRunner(path).run('list-calendars', {})).rejects.toBeInstanceOf(HelperError)
+    await expect(createHelperRunner(path).run('list-calendars', {})).rejects.toMatchObject({
+      code: expect.any(String),
+    })
+  })
 })
 
 describe('resolveHelperPath', () => {

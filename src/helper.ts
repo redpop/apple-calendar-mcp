@@ -26,6 +26,21 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
           return
         }
 
+        // Node emits both 'error' and 'close' for some spawn failures; only the
+        // first settle may win, otherwise a second reject()/resolve() would be a
+        // silent no-op today but a foot-gun for future edits.
+        let settled = false
+        const settleResolve = (value: unknown): void => {
+          if (settled) return
+          settled = true
+          resolve(value)
+        }
+        const settleReject = (error: HelperError): void => {
+          if (settled) return
+          settled = true
+          reject(error)
+        }
+
         const child = spawn(helperPath, [command], { stdio: ['pipe', 'pipe', 'pipe'] })
         let stdout = ''
         let stderr = ''
@@ -39,25 +54,33 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
           stderr += chunk
         })
 
+        // Helpers that exit before reading stdin (check-access, list-calendars,
+        // and the unknown-command path all do this) can make the stdin write
+        // fail with EPIPE. Without this handler that throws as an uncaught
+        // exception and takes down the whole process instead of rejecting.
+        child.stdin.on('error', (error: Error) => {
+          settleReject(new HelperError('HELPER_CRASHED', error.message))
+        })
+
         child.on('error', (error: Error) => {
-          reject(new HelperError('HELPER_CRASHED', error.message))
+          settleReject(new HelperError('HELPER_CRASHED', error.message))
         })
 
         child.on('close', (code) => {
           if (code === 0) {
             try {
-              resolve(JSON.parse(stdout) as unknown)
+              settleResolve(JSON.parse(stdout) as unknown)
             } catch {
-              reject(new HelperError('HELPER_CRASHED', `Unlesbare Ausgabe: ${stdout.slice(0, 200)}`))
+              settleReject(new HelperError('HELPER_CRASHED', `Unlesbare Ausgabe: ${stdout.slice(0, 200)}`))
             }
             return
           }
 
           try {
             const parsed = JSON.parse(stderr.trim()) as { code?: string; message?: string }
-            reject(new HelperError(parsed.code ?? 'HELPER_CRASHED', parsed.message ?? stderr.trim()))
+            settleReject(new HelperError(parsed.code ?? 'HELPER_CRASHED', parsed.message ?? stderr.trim()))
           } catch {
-            reject(new HelperError('HELPER_CRASHED', stderr.trim() || `Exit-Code ${String(code)}`))
+            settleReject(new HelperError('HELPER_CRASHED', stderr.trim() || `Exit-Code ${String(code)}`))
           }
         })
 
