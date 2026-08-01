@@ -108,23 +108,8 @@ func ensureAccess(_ store: EKEventStore) {
 
 func commandCheckAccess() -> Never {
     let store = EKEventStore()
-    let status = EKEventStore.authorizationStatus(for: .event)
-
-    if status == .notDetermined {
-        ensureAccess(store)
-        emit(["status": "authorized"])
-    }
-
-    let label: String
-    switch status {
-    case .notDetermined: label = "notDetermined"
-    case .restricted: label = "restricted"
-    case .denied: label = "denied"
-    case .fullAccess: label = "authorized"
-    case .writeOnly: label = "writeOnly"
-    @unknown default: label = "unknown"
-    }
-    emit(["status": label])
+    ensureAccess(store)
+    emit(["status": "authorized"])
 }
 
 // MARK: - Kalender
