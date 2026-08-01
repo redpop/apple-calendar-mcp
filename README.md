@@ -91,9 +91,13 @@ see an entry named `calendar-helper` there — you will see *Terminal*
 parent process, not the helper binary. Do not go looking for the helper's
 own name in this list; it will never appear.
 
-macOS 14+ distinguishes two access levels for each app in that list, changed
-via the **Options…** button next to the entry (not the on/off toggle, which
-is easy to overlook):
+macOS 14+ distinguishes two access levels for each app in that list. **The
+on/off toggle next to the app's name does not expose this choice at all** —
+you can have the toggle ON and still be stuck on the lower level. The level
+lives one layer deeper, behind the **Options…** button ("Optionen …" in the
+German settings pane, which is what you'll actually be looking at if macOS
+is set to German) next to the app's entry. Clicking it opens a small dialog
+offering exactly two choices:
 
 - **"Add Only"** ("Zugriff nur zum Hinzufügen" in German) — the app can
   create events but cannot read existing ones. The helper reports this as
@@ -101,11 +105,16 @@ is easy to overlook):
   access and returns a `PERMISSION_DENIED` error, because every one of this
   server's tools needs to read (even `create_event` needs to look up
   calendars first).
-- **"Full Access"** ("Vollzugriff auf Kalender") — required for everything
-  this server does.
+- **"Full Access"** ("Vollzugriff auf Kalender" in German) — required for
+  everything this server does.
 
-If you get a permission error even though you granted *something*, check
-whether it's set to Add Only and switch it to Full Access via **Options…**.
+This is the single most common trap: a user sees the toggle already ON,
+concludes access is granted, and doesn't think to look for a second,
+separate control — then gets a confusing `PERMISSION_DENIED` from a tool
+that appears to already have permission. If you get a permission error even
+though you granted *something*, this is the first thing to check: open
+**Options…** ("Optionen …") next to the relevant app's entry and confirm
+"Full Access" / "Vollzugriff auf Kalender" is selected, not "Add Only".
 
 ### Step 3: Claude Desktop needs its own, separate grant
 
@@ -307,6 +316,24 @@ If you want a reminder at a specific clock time other than 09:00 on an
 all-day event, that isn't currently expressible through this tool — it
 mirrors Calendar.app's own behavior exactly, including that limitation.
 
+**Other calendar apps may add their own alarm on top of ours.**
+`alarmMinutesBefore` controls only the alarm(s) this server explicitly sets
+when it creates the event — nothing more. EventKit is a shared store: any
+other calendar client reading from the same store can apply its own
+"default alarm" rule to events it sees, including ones this server created.
+For example, BusyCal has a setting (**Alarms → Automatically add an alarm
+to → All-day events**) that, by default, adds a 09:00-same-day alarm to
+every all-day event saved to the store — on top of whatever alarm this
+server already added. So a call with `alarmMinutesBefore: [1440]` can
+legitimately show **two** reminders in such an app: this server's 09:00
+*the day before*, plus that app's own default 09:00 *the same day*. That is
+the third-party client's own default alert firing independently, not a
+duplicate-alarm bug in this server. If you see an unexpected extra
+reminder, check that client's own alert/notification preferences before
+assuming this server is at fault. (Worth noting: BusyCal's own default for
+all-day events is likewise 09:00 — the same convention this server
+implements, for the same reason: it matches what Calendar.app itself does.)
+
 ## Troubleshooting
 
 **The permission dialog reappears after every rebuild.** The ad-hoc code
@@ -333,6 +360,19 @@ closed the window) after editing the config.
 **Access denied in Claude Desktop even though Terminal has it.** See "Claude
 Desktop needs its own, separate grant" above — grant Claude access
 independently under System Settings → Privacy & Security → Calendars.
+
+**`PERMISSION_DENIED` even though the toggle for Terminal/Claude is already
+ON.** The toggle only means "some access," not "full access" — see "Step 2:
+understand the two grant levels" above. Open **Options…** ("Optionen …")
+next to that app's entry in System Settings → Privacy & Security →
+Calendars and confirm it's set to "Full Access" / "Vollzugriff auf
+Kalender", not "Add Only" / "Zugriff nur zum Hinzufügen".
+
+**An all-day event shows two reminders instead of one.** This is expected
+if you also use another calendar app (e.g. BusyCal) against the same
+calendar store — it is adding its own default alarm on top of the one this
+server set. See "All-day events and the alarm rule" above; it is not a bug
+in this server.
 
 **Do not try `tccutil reset Calendar io.github.apple-calendar-mcp.calendar-helper`.**
 It fails with `No such bundle identifier ... (OSStatus error -10814)`,
