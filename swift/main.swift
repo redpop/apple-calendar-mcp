@@ -85,7 +85,14 @@ func parseDate(_ value: Any?, field: String) throws -> Date {
 // MARK: - Berechtigung
 
 /// Stellt sicher, dass Vollzugriff besteht. Bricht sonst mit klarem Fehler ab.
-func ensureAccess(_ store: EKEventStore) {
+///
+/// `timeoutSeconds` ist standardmaessig `nil`: dann wartet der Callback ohne
+/// Frist, was fuer die einshot-Kommandos genau richtig ist — dort sitzt ein
+/// Mensch vor dem Terminal und sieht den Systemdialog. Der Serve-Modus
+/// uebergibt eine endliche Frist, weil ein LaunchAgent niemanden hat, der den
+/// Dialog anklickt; ohne Frist blieb der Daemon dort beobachtet unauffindbar
+/// haengen (kein Log, kein Exit) statt sichtbar zu scheitern.
+func ensureAccess(_ store: EKEventStore, timeoutSeconds: Double? = nil) {
     switch EKEventStore.authorizationStatus(for: .event) {
     case .fullAccess:
         return
@@ -113,7 +120,19 @@ func ensureAccess(_ store: EKEventStore) {
         granted = ok
         semaphore.signal()
     }
-    semaphore.wait()
+
+    if let timeoutSeconds = timeoutSeconds {
+        let timedOut = semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut
+        if timedOut {
+            // Weder erteilt noch verweigert — vom "denied"-Fall oben bewusst
+            // unterschieden: dort hat TCC klar geantwortet, hier hat gar
+            // niemand geantwortet (kein Dialog erschien oder ihn beantwortet
+            // hat). Diese Unterscheidung ist der ganze Sinn der Frist.
+            fail("PERMISSION_TIMEOUT", "Kalenderzugriff wurde innerhalb von \(Int(timeoutSeconds)) Sekunden weder erteilt noch verweigert — es kam keine Antwort auf die Anfrage (moeglicherweise erschien gar kein Dialog). Starte den Dienst erneut, nachdem der Zugriff unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender erteilt wurde.")
+        }
+    } else {
+        semaphore.wait()
+    }
 
     if !granted {
         fail("PERMISSION_DENIED", "Kalenderzugriff wurde nicht erteilt. Aktiviere ihn unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender.")
@@ -601,6 +620,13 @@ func isSocketAlive(_ path: String) -> Bool {
     return connectResult == 0
 }
 
+/// Wie lange der Serve-Start auf eine TCC-Antwort wartet, bevor er aufgibt.
+/// Lang genug, dass ein Mensch einen Systemdialog bemerken und bestaetigen
+/// kann; kurz genug, dass ein haengender Daemon nicht wie ein toter wirkt.
+/// Das ThrottleInterval des LaunchAgents (60s) sorgt dafuer, dass ein Zugriff,
+/// der erst spaeter erteilt wird, beim naechsten automatischen Neustart wirkt.
+let serveAccessCheckTimeoutSeconds: Double = 30
+
 func commandServe(_ extraArguments: [String]) -> Never {
     // Ein Client, der mitten im Schreiben trennt, darf den Daemon nicht per
     // SIGPIPE toeten.
@@ -629,9 +655,15 @@ func commandServe(_ extraArguments: [String]) -> Never {
     // Zugriff wird genau einmal beim Start geprueft — danach setzt die
     // Request-Verarbeitung ihn als gegeben voraus. Ein Serve-Prozess ohne
     // Kalenderzugriff ist nutzlos; lautes Scheitern macht den Grund im
-    // LaunchAgent-Log sichtbar.
+    // LaunchAgent-Log sichtbar. Mit Frist: ein LaunchAgent hat niemanden, der
+    // einen Systemdialog anklickt, und ein Callback, der nie antwortet, darf
+    // den Daemon nicht unsichtbar fuer immer haengen lassen (genau das ist im
+    // ersten echten LaunchAgent-Lauf passiert — kein Log, kein Exit, nur ein
+    // Prozess in semaphore_wait_trap).
+    serveLog("calendar-helper: prüfe Kalenderzugriff (Frist \(Int(serveAccessCheckTimeoutSeconds))s)…")
     let store = EKEventStore()
-    ensureAccess(store)
+    ensureAccess(store, timeoutSeconds: serveAccessCheckTimeoutSeconds)
+    serveLog("calendar-helper: Kalenderzugriff erteilt.")
 
     let listenFd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard listenFd >= 0 else {
