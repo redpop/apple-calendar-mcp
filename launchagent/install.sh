@@ -22,15 +22,33 @@ LOG="$HOME/Library/Logs/apple-calendar-mcp.log"
 SOCKET="$HOME/Library/Application Support/apple-calendar-mcp/helper.sock"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARY="$REPO_ROOT/bin/calendar-helper"
+BUILT="$REPO_ROOT/bin/calendar-helper"
 
-if [ ! -x "$BINARY" ]; then
-  echo "FEHLER: $BINARY fehlt oder ist nicht ausfuehrbar." >&2
+# Der Dienst laeuft NICHT aus dem Repo, sondern aus einem stabilen
+# Installationsverzeichnis. Zwei Gruende:
+#   1. Ein LaunchAgent, der ins Repo zeigt, bricht, sobald das Projekt
+#      verschoben oder bin/ aufgeraeumt wird.
+#   2. macOS merkt sich die Kalenderberechtigung fuer Kommandozeilen-
+#      programme am PFAD. Ein fester Installationsort haelt sie stabil,
+#      waehrend im Repo jeder Rebuild an derselben Stelle landet.
+INSTALL_DIR="$HOME/Library/Application Support/apple-calendar-mcp"
+BINARY="$INSTALL_DIR/calendar-helper"
+
+if [ ! -x "$BUILT" ]; then
+  echo "FEHLER: $BUILT fehlt oder ist nicht ausfuehrbar." >&2
   echo "Bitte zuerst bauen:  ./swift/build.sh" >&2
   exit 1
 fi
 
-mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "$INSTALL_DIR"
+
+# Vorherige Instanz stoppen, bevor das Binary ersetzt wird.
+launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
+
+cp -f "$BUILT" "$BINARY"
+echo "Binary installiert: $BINARY"
+codesign -dvv "$BINARY" 2>&1 | grep -E "^TeamIdentifier" \
+  || echo "  Hinweis: ad-hoc signiert - Berechtigung gilt nur bis zum naechsten Rebuild."
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -78,7 +96,6 @@ EOF
 
 echo "LaunchAgent geschrieben: $PLIST"
 
-launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST"
 echo "Geladen. Warte auf den Socket ..."
 
