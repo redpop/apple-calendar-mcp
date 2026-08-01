@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.apple-calendar-mcp.calendar-helper</string>
+  <key>CFBundleName</key>
+  <string>calendar-helper</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Dieses Hilfsprogramm liest und schreibt Termine in deinem Kalender, damit Claude sie abfragen und anlegen kann.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Dieses Hilfsprogramm liest und schreibt Termine in deinem Kalender, damit Claude sie abfragen und anlegen kann.</string>
+</dict>
+</plist>
