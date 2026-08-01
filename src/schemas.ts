@@ -35,7 +35,9 @@ export const listEventsInput = z.object({
 export const createEventInput = z.object({
   title: z.string().min(1).describe('Titel des Termins'),
   start: isoDateTime.describe('Beginn, ISO 8601 mit Offset'),
-  end: isoDateTime.describe('Ende, ISO 8601 mit Offset'),
+  end: isoDateTime.describe(
+    'Ende, ISO 8601 mit Offset. Bei ganztägigen Terminen (allDay: true) sind beide gängigen Schreibweisen zulässig und werden auf denselben Tag normalisiert: der letzte eingeschlossene Tag (z. B. …T23:59:59) oder Mitternacht des Folgetages (…T00:00:00 des nächsten Datums).',
+  ),
   calendarId: z.string().optional().describe('Zielkalender; Standard: Standardkalender'),
   allDay: z
     .boolean()

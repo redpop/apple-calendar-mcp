@@ -137,22 +137,53 @@ function dayWindows(rangeStart: Date, rangeEnd: Date, options: FreeTimeOptions):
 }
 
 /**
- * Berechnet freie Zeitfenster. Pur: keine Kalender-, Datei- oder Netzwerkzugriffe,
- * damit die Logik ohne EventKit und ohne TCC-Berechtigung testbar bleibt.
+ * Prüft Eingaben, ohne etwas zu berechnen oder zu werfen — pur, wie der Rest
+ * dieser Datei (keine Imports). Gibt bei ungültiger Eingabe eine
+ * Klartext-Fehlermeldung zurück, sonst `undefined`. Damit kann der Aufrufer
+ * (z. B. der `find_free_time`-Tool-Wrapper) Validierungsfehler als
+ * `INVALID_INPUT` melden, *bevor* ein Helper-Prozess gestartet und der
+ * gesamte Kalender gelesen wird — hier drin bleibt aber bewusst kein
+ * `errors.js`-Import, damit die Datei pur bleibt.
  */
-export function computeFreeSlots(events: BusyEvent[], options: FreeTimeOptions): FreeSlot[] {
+export function validateFreeTimeInput(options: FreeTimeOptions): string | undefined {
   const rangeStart = new Date(options.start)
   const rangeEnd = new Date(options.end)
 
   if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
-    throw new Error('start und end müssen gültige ISO-8601-Zeitpunkte sein.')
+    return 'start und end müssen gültige ISO-8601-Zeitpunkte sein.'
   }
   if (rangeEnd.getTime() <= rangeStart.getTime()) {
-    throw new Error('end muss nach start liegen.')
+    return 'end muss nach start liegen.'
   }
   if (options.durationMinutes <= 0) {
-    throw new Error('durationMinutes muss größer als null sein.')
+    return 'durationMinutes muss größer als null sein.'
   }
+  if (options.workingHours !== undefined) {
+    try {
+      const from = parseClock(options.workingHours.start, 'workingHours.start')
+      const to = parseClock(options.workingHours.end, 'workingHours.end')
+      if (to <= from) {
+        return 'workingHours.end muss nach workingHours.start liegen.'
+      }
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+  return undefined
+}
+
+/**
+ * Berechnet freie Zeitfenster. Pur: keine Kalender-, Datei- oder Netzwerkzugriffe,
+ * damit die Logik ohne EventKit und ohne TCC-Berechtigung testbar bleibt.
+ */
+export function computeFreeSlots(events: BusyEvent[], options: FreeTimeOptions): FreeSlot[] {
+  const validationError = validateFreeTimeInput(options)
+  if (validationError !== undefined) {
+    throw new Error(validationError)
+  }
+
+  const rangeStart = new Date(options.start)
+  const rangeEnd = new Date(options.end)
 
   const busy = mergeSpans(
     events

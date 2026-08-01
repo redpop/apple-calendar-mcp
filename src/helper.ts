@@ -56,10 +56,18 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
 
         // Helpers that exit before reading stdin (check-access, list-calendars,
         // and the unknown-command path all do this) can make the stdin write
-        // fail with EPIPE. Without this handler that throws as an uncaught
-        // exception and takes down the whole process instead of rejecting.
+        // fail with EPIPE. Without a handler that throws as an uncaught
+        // exception and takes down the whole process. We must not settle on
+        // it directly, though: check-access and list-calendars never read
+        // stdin at all, so their pipe is *always* unread, and the write can
+        // lose the race against the child already having exited with a real,
+        // meaningful result (e.g. a genuine PERMISSION_DENIED). Recording the
+        // error and letting 'close' decide means a valid result still wins;
+        // this recorded error is only used as a fallback if 'close' itself
+        // yields nothing better.
+        let stdinError: HelperError | undefined
         child.stdin.on('error', (error: Error) => {
-          settleReject(new HelperError('HELPER_CRASHED', error.message))
+          stdinError = new HelperError('HELPER_CRASHED', error.message)
         })
 
         child.on('error', (error: Error) => {
@@ -71,7 +79,7 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
             try {
               settleResolve(JSON.parse(stdout) as unknown)
             } catch {
-              settleReject(new HelperError('HELPER_CRASHED', `Unlesbare Ausgabe: ${stdout.slice(0, 200)}`))
+              settleReject(stdinError ?? new HelperError('HELPER_CRASHED', `Unlesbare Ausgabe: ${stdout.slice(0, 200)}`))
             }
             return
           }
@@ -80,7 +88,7 @@ export function createHelperRunner(helperPath: string = resolveHelperPath()): He
             const parsed = JSON.parse(stderr.trim()) as { code?: string; message?: string }
             settleReject(new HelperError(parsed.code ?? 'HELPER_CRASHED', parsed.message ?? stderr.trim()))
           } catch {
-            settleReject(new HelperError('HELPER_CRASHED', stderr.trim() || `Exit-Code ${String(code)}`))
+            settleReject(stdinError ?? new HelperError('HELPER_CRASHED', stderr.trim() || `Exit-Code ${String(code)}`))
           }
         })
 

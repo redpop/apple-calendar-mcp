@@ -193,6 +193,29 @@ describe('find_free_time', () => {
     expect(slots).toHaveLength(2)
     expect(slots[0]?.start).toBe('2026-08-03T09:00:00+02:00')
   })
+
+  it('meldet eine ungültige workingHours-Reihenfolge als INVALID_INPUT statt als generischen Fehler, ohne den Helper aufzurufen', async () => {
+    const { server, calls } = buildServer(() => ({
+      events: [],
+      totalMatched: 0,
+      truncated: false,
+    }))
+    const tool = registeredTools(server)['find_free_time']
+
+    const result = await tool?.callback({
+      start: '2026-08-03T00:00:00+02:00',
+      end: '2026-08-03T23:59:59+02:00',
+      durationMinutes: 60,
+      activityDomain: 'work',
+      workingHours: { start: '18:00', end: '09:00' },
+      ignoreAllDay: true,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('ungültig')
+    expect(result.content[0].text).not.toContain('unerwarteter Fehler')
+    expect(calls).toHaveLength(0)
+  })
 })
 
 describe('Fehlerbehandlung', () => {

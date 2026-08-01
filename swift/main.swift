@@ -83,6 +83,11 @@ func ensureAccess(_ store: EKEventStore) {
     case .denied:
         fail("PERMISSION_DENIED", "Kalenderzugriff wurde verweigert. Aktiviere ihn unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender.")
     default:
+        // Faengt sowohl .notDetermined (noch nie gefragt) als auch .writeOnly
+        // (nur "Nur Hinzufuegen" erteilt) ab — beide muessen zur vollen
+        // Anfrage unten eskalieren. .writeOnly hier versehentlich als
+        // ausreichend zu behandeln war genau der Fehler, der live entdeckt
+        // wurde; nicht "aufraeumen".
         break
     }
 
@@ -296,9 +301,26 @@ func commandCreateEvent() -> Never {
     }
 
     let start = parseDate(payload["start"], field: "start")
-    let end = parseDate(payload["end"], field: "end")
+    var end = parseDate(payload["end"], field: "end")
     guard end >= start else {
         fail("INVALID_INPUT", "'end' darf nicht vor 'start' liegen.")
+    }
+
+    let allDay = (payload["allDay"] as? Bool) ?? false
+
+    // Ganztaegige Termine: EventKit liefert beim Lesen 23:59:59 des letzten
+    // Tages (siehe inclusiveEndDay/serializeEvent), aber ein naheliegender
+    // Aufrufer — insbesondere ein LLM, das die verbreitete halboffene
+    // Bereichskonvention kennt — schickt stattdessen Mitternacht des
+    // Folgetages. Ohne diese Normalisierung wuerde EventKit daraus einen
+    // zusaetzlichen Tag machen. Beide Schreibweisen muessen auf denselben
+    // Tag abbilden; inclusiveEndDay wird bewusst wiederverwendet statt einer
+    // zweiten Implementierung.
+    if allDay {
+        let normalizedEnd = inclusiveEndDay(end)
+        if normalizedEnd >= start {
+            end = normalizedEnd
+        }
     }
 
     let calendar: EKCalendar
@@ -317,8 +339,6 @@ func commandCreateEvent() -> Never {
     guard calendar.allowsContentModifications else {
         fail("CALENDAR_READONLY", "Der Kalender '\(calendar.title)' erlaubt keine Änderungen.")
     }
-
-    let allDay = (payload["allDay"] as? Bool) ?? false
 
     let event = EKEvent(eventStore: store)
     event.calendar = calendar

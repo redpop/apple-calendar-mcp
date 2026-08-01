@@ -295,9 +295,16 @@ is for that), and it creates nothing.
 All-day events carry two extra fields not present on timed events:
 `startDay` and `endDay`, both plain `YYYY-MM-DD` dates with no time or
 offset. `endDay` is the **last included day**, not the day after — matching
-how Calendar.app displays multi-day all-day events, and *not* matching
-EventKit's raw `endDate`, which is midnight of the following day. The server
-converts between the two internally so callers never have to.
+how Calendar.app displays multi-day all-day events. On read, EventKit's own
+raw `endDate` for all-day events is **`23:59:59` of that last included
+day** — verified against this project's own captured live calendar data —
+not midnight of the following day, as the near-universal half-open-range
+convention might lead you to expect. On write (`create_event`), the server
+accepts *either* form for `end` when `allDay` is `true`: the last included
+day (e.g. `…T23:59:59`) or, defensively, midnight of the following day
+(e.g. `…T00:00:00` of the next date). Both are normalised to the same
+single all-day event. The server converts between the two internally so
+callers never have to.
 
 **Alarms on all-day events follow Calendar.app's convention, not a literal
 minute countdown.** For a timed event, `alarmMinutesBefore: [15]` means

@@ -111,6 +111,17 @@ describe('computeFreeSlots — ganztägige und abgesagte Termine', () => {
     )
     expect(slots).toHaveLength(1)
   })
+
+  it('behandelt status "none" als belegt — das liefert reales EventKit für gewöhnliche Termine', () => {
+    // Live-Kalenderdaten (.superpowers/events-august.json) zeigen "none" als
+    // status-Wert für normale, nicht abgesagte Termine — nicht "confirmed".
+    // Nur "canceled" darf Termine von "belegt" ausnehmen.
+    const slots = computeFreeSlots(
+      [busy('2026-08-03T08:00:00+02:00', '2026-08-03T19:00:00+02:00', { status: 'none' })],
+      options(),
+    )
+    expect(slots).toEqual([])
+  })
 })
 
 describe('computeFreeSlots — activityDomain', () => {

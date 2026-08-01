@@ -68,11 +68,26 @@ describe('createHelperRunner', () => {
     await expect(runner.run('list-calendars', {})).rejects.toMatchObject({ code: 'HELPER_MISSING' })
   })
 
-  it('faengt EPIPE ab, wenn der Helper beendet, bevor stdin gelesen wurde', async () => {
+  it('loest auf, wenn der Helper trotz fehlgeschlagenem stdin-Schreiben gueltige JSON-Ausgabe liefert', async () => {
     // Kein "cat" hier — der Helper liest stdin nie und beendet sich sofort,
     // wie es check-access, list-calendars und der unbekannte-Kommando-Pfad
-    // im echten Swift-Binary tun.
+    // im echten Swift-Binary tun. Ein EPIPE beim stdin-Schreiben darf ein
+    // echtes, gueltiges Ergebnis nicht verdraengen — sonst wuerde ein
+    // gültiges PERMISSION_DENIED von list-calendars im Race-Fall faelschlich
+    // als "Hilfsprogramm unerwartet beendet (EPIPE)" gemeldet.
     const path = writeFakeHelper('no-stdin-read-helper', 'echo "{\\"ok\\":true}"; exit 0')
+    const largePayload = { notes: 'x'.repeat(2_000_000) }
+    const result = await createHelperRunner(path).run('check-access', largePayload)
+    expect(result).toEqual({ ok: true })
+  })
+
+  it('crasht den Prozess nicht, wenn stdin ungelesen bleibt und der Helper ohne verwertbares Ergebnis endet', async () => {
+    // Derselbe unlesbare-stdin-Fall wie oben, aber ohne gueltige Ausgabe: das
+    // war die urspruengliche kritische Erkenntnis, fuer die dieser
+    // Error-Handler existiert — ein ungefangenes EPIPE hier wuerde den
+    // gesamten Node-Prozess mit einer uncaught exception beenden statt nur
+    // dieses Promise abzulehnen.
+    const path = writeFakeHelper('no-stdin-no-output-helper', 'exit 1')
     const largePayload = { notes: 'x'.repeat(2_000_000) }
     await expect(createHelperRunner(path).run('check-access', largePayload)).rejects.toBeInstanceOf(HelperError)
   })
