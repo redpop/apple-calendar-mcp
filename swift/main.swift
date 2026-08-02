@@ -714,7 +714,86 @@ func commandServe(_ extraArguments: [String]) -> Never {
     }
 }
 
+// MARK: - TCC-Selbstverantwortung
+
+/// macOS ordnet die Kalenderberechtigung dem verantwortlichen ELTERNPROZESS
+/// zu, nicht dem aufgerufenen Programm. Ein MCP-Client, der in seinem Bundle
+/// keinen Kalender-Verwendungszweck deklariert, sperrt damit jeden Prozess
+/// aus, den er startet — auch diesen Helper.
+///
+/// `responsibility_spawnattrs_setdisclaim` gibt diese Verantwortung ab: der
+/// neu ausgefuehrte Prozess wird sein EIGENER TCC-Verantwortlicher, und macOS
+/// liest die Usage-Description aus SEINER eingebetteten Info.plist. Dieselbe
+/// private libSystem-API benutzt Chromium fuer seine Helper-Prozesse.
+///
+/// Aufgeloest wird sie per dlsym statt per Link: verschwindet das Symbol in
+/// einem kuenftigen macOS, laeuft der Helper einfach ohne Disclaim weiter —
+/// funktional so gesperrt wie vorher, aber ohne Ladefehler und ohne Absturz.
+func reexecDisclaimed() {
+    let marker = "CALENDAR_HELPER_DISCLAIMED"
+    let debug = ProcessInfo.processInfo.environment["CALENDAR_HELPER_DEBUG"] != nil
+
+    /// Diagnose gehoert auf stderr — stdout traegt ausschliesslich das
+    /// JSON-Protokoll, das der Node-Layer parst.
+    func log(_ message: String) {
+        FileHandle.standardError.write(Data("calendar-helper: disclaim: \(message)\n".utf8))
+    }
+
+    // Marker gesetzt? Dann ist dies bereits der ersetzte Prozess. Ohne diese
+    // Abbruchbedingung wuerde sich der Helper endlos selbst ersetzen.
+    guard ProcessInfo.processInfo.environment[marker] == nil else { return }
+
+    // RTLD_DEFAULT ist auf Darwin ((void *) -2).
+    let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+    guard let symbol = dlsym(rtldDefault, "responsibility_spawnattrs_setdisclaim") else {
+        if debug { log("Symbol nicht vorhanden — weiter ohne") }
+        return
+    }
+    typealias SetDisclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+    let setDisclaim = unsafeBitCast(symbol, to: SetDisclaim.self)
+
+    guard let executable = Bundle.main.executablePath else {
+        if debug { log("eigener Pfad nicht ermittelbar — weiter ohne") }
+        return
+    }
+
+    var attributes: posix_spawnattr_t?
+    guard posix_spawnattr_init(&attributes) == 0 else { return }
+    defer { posix_spawnattr_destroy(&attributes) }
+
+    // POSIX_SPAWN_SETEXEC ersetzt dieses Prozessabbild an Ort und Stelle.
+    // Ohne das Flag wuerde posix_spawn ein Kind erzeugen und dieser Prozess
+    // liefe daneben weiter — zwei Prozesse, von denen einer nichts tut.
+    guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC)) == 0 else { return }
+    _ = setDisclaim(&attributes, 1)
+
+    var environment = ProcessInfo.processInfo.environment
+    environment[marker] = "1"
+
+    var cArguments: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) }
+    cArguments.append(nil)
+    var cEnvironment: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") }
+    cEnvironment.append(nil)
+    defer {
+        for pointer in cArguments where pointer != nil { free(pointer) }
+        for pointer in cEnvironment where pointer != nil { free(pointer) }
+    }
+
+    if debug { log("ersetze Prozessabbild (\(executable))") }
+
+    var pid: pid_t = 0
+    let result = posix_spawn(&pid, executable, nil, &attributes, &cArguments, &cEnvironment)
+
+    // Mit SETEXEC kehrt ein erfolgreicher Spawn NIE zurueck. Alles ab hier
+    // bedeutet, dass der Austausch gescheitert ist.
+    log("fehlgeschlagen (\(String(cString: strerror(result)))) — weiter ohne")
+}
+
 // MARK: - Dispatch
+
+// Muss vor jedem EventKit-Zugriff stehen: nach dem Austausch beginnt der
+// Prozess von vorn, und alles davor liefe zweimal.
+reexecDisclaimed()
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
