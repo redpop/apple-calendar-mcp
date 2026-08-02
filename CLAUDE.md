@@ -61,7 +61,14 @@ Tool `annotations` are functional: `readOnlyHint: true` is what lets a host run 
 
 `swift/build.sh` uses a Developer ID certificate when one exists, otherwise ad-hoc. This is not cosmetic: ad-hoc binds the TCC grant to the code hash, so every rebuild silently invalidates it and macOS then refuses without showing a dialog. A Developer ID signature is what makes a grant survive rebuilds at all.
 
-**What exactly the grant binds to is not fully settled.** The working assumption was bundle id + team id. But two binaries with identical bundle id, team id and Developer ID — differing only in path and code hash — showed up as *two separate entries* in System Settings. That suggests the path is part of the identity for command-line tools, which matters a lot for npm distribution, where the install path moves between versions. Being investigated in ACM-5; don't rely on either reading until that closes.
+**What the grant binds to, measured in ACM-5:**
+
+- **The code hash does not matter.** `bin/calendar-helper` was rebuilt twice after the grant (`9d2ab825…` → `f9fefabe…`) and kept working without a new prompt. Rebuilding in place is free.
+- **The path does.** A *byte-identical* copy at a different path triggered a fresh permission dialog and got its own entry in System Settings. TCC tracks command-line tools per path — which is also why `tccutil reset Calendar <bundle-id>` fails with OSStatus -10814.
+
+The consequence for distribution: a binary living under a version-dependent path (an npm cache directory, say) would re-prompt on **every update**. So the helper must be copied to a fixed location on first run and spawned from there — the same reasoning the old `launchagent/install.sh` gave. See ACM-1.
+
+Untested: whether ad-hoc versus Developer ID changes any of this at a *known* path. The experiment that was meant to answer it varied path and signature at once, so it proved nothing.
 
 Hardened runtime requires `swift/calendar-helper.entitlements`. That file must contain **no XML comments** — the AMFI parser rejects them with a syntax error.
 
