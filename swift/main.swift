@@ -575,7 +575,9 @@ func commandServe() -> Never {
     serveLog("calendar-helper: prüfe Kalenderzugriff (Frist \(Int(serveAccessCheckTimeoutSeconds))s)…")
     let store = EKEventStore()
     ensureAccess(store, timeoutSeconds: serveAccessCheckTimeoutSeconds)
-    serveLog("calendar-helper: bereit.")
+    // PID mitschreiben: Wer im Log nachsieht, warum ein Tool-Aufruf haengt,
+    // will den Prozess auch finden koennen.
+    serveLog("calendar-helper: bereit (PID \(getpid())).")
 
     readStdinLines { line in
         FileHandle.standardOutput.write(handleServeLine(line, store: store))

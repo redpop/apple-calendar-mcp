@@ -29,6 +29,8 @@ The helper escapes this by **disclaiming that responsibility at startup**. `reex
 
 Because the helper carries its own permission identity, it needs no service registration. It runs as a **long-lived child process** of the MCP server (`calendar-helper serve`), speaking NDJSON over stdin/stdout. Node never touches EventKit.
 
+It is not, however, run from where the package puts it. `src/helperInstall.ts` copies it to `~/Library/Application Support/apple-calendar-mcp/bin/calendar-helper` on first use and spawns it from there, because the TCC grant is bound to the path (see Code signing). Copying goes through a `.tmp` file and `rename()`: a running binary cannot be overwritten on macOS (ETXTBSY), and deleting the target first would give up the very path the grant hangs on. Verified end to end — replacing the installed binary with a differently-hashed build produced no new prompt.
+
 Consequences when working here:
 
 - The process is long-lived on purpose. Process start, the disclaim re-exec, `EKEventStore` setup and the TCC check would otherwise be paid on *every* tool call. Measured on an M-series Mac with six calendars: **324 ms for the first call, 1 ms for each one after**. `src/stdioRunner.ts` starts it lazily on the first call, queues requests FIFO, and restarts it after a crash.

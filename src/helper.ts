@@ -1,18 +1,31 @@
 import { fileURLToPath } from 'node:url'
+import { ensureInstalledHelper } from './helperInstall.js'
 import { createStdioRunner, type StdioHelperRunner } from './stdioRunner.js'
 
 export interface HelperRunner {
   run(command: string, payload: Record<string, unknown>): Promise<unknown>
 }
 
+/** Wo das Binary im ausgelieferten Paket liegt. */
+export function packagedHelperPath(): string {
+  return fileURLToPath(new URL('../bin/calendar-helper', import.meta.url))
+}
+
 /**
- * Loest den Pfad zum Swift-Binary auf. Ohne Override liegt es relativ zum
- * Paket-Root — kein benutzerspezifischer Pfad im Repo.
+ * Loest den Pfad auf, von dem der Helper gestartet wird.
+ *
+ * Nicht das Paketverzeichnis: Die Kalenderberechtigung haengt am Pfad (siehe
+ * `helperInstall.ts`), und der wandert bei npm mit jeder Version. Der Helper
+ * wird deshalb beim ersten Start an einen festen Ort kopiert und von dort
+ * ausgefuehrt.
+ *
+ * `APPLE_CALENDAR_HELPER_PATH` umgeht beides — gedacht fuer die Entwicklung,
+ * wo man einen frischen Build ohne Umweg testen will.
  */
 export function resolveHelperPath(): string {
   const override = process.env.APPLE_CALENDAR_HELPER_PATH
   if (override !== undefined && override.length > 0) return override
-  return fileURLToPath(new URL('../bin/calendar-helper', import.meta.url))
+  return ensureInstalledHelper(packagedHelperPath())
 }
 
 /**
