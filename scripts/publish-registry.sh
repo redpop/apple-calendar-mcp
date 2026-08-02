@@ -18,15 +18,10 @@ cd "$REPO_ROOT"
 
 VERSION="$(node -p "require('./package.json').version")"
 
-# server.json traegt die Version doppelt: einmal fuer den Server, einmal fuer
-# das Paket. Beide aus package.json setzen, damit sie nicht auseinanderlaufen.
-VERSION="$VERSION" node -e '
-  const fs = require("node:fs");
-  const manifest = JSON.parse(fs.readFileSync("server.json", "utf8"));
-  manifest.version = process.env.VERSION;
-  for (const pkg of manifest.packages) pkg.version = process.env.VERSION;
-  fs.writeFileSync("server.json", JSON.stringify(manifest, null, 2) + "\n");
-'
+# Haelt server.json mit package.json im Gleichklang. Der npm-"version"-Hook
+# tut dasselbe beim Versionsbump; hier noch einmal, damit ein von Hand
+# angelegter Tag nicht doch eine veraltete Version eintraegt.
+node scripts/sync-server-json.mjs
 
 # Die Registry begrenzt die Beschreibung auf 100 Zeichen und meldet einen
 # Verstoss erst nach dem Hochladen. Hier abfangen, damit der Fehler nicht

@@ -41,6 +41,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "version": "node scripts/sync-server-json.mjs && git add server.json",
     "build:helper": "bash swift/build.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
