@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A local MCP server exposing Apple Calendar to Claude on macOS. Two halves: a Swift CLI wrapping EventKit, and a TypeScript MCP layer that drives it.
+An MCP server exposing Apple Calendar on macOS to any client that speaks the protocol. Two halves: a Swift CLI wrapping EventKit, and a TypeScript MCP layer that drives it.
 
 ## Commands
 
@@ -19,7 +19,7 @@ npm run build                             # tsc -> dist/ (src/ only)
 
 After changing `swift/main.swift`, run `./swift/build.sh` and restart the client. There is no service to reinstall — the helper is a child process of the MCP server, so the next server start picks up the new binary.
 
-After changing `src/`, run `npm run build` and restart Claude Desktop; it loads `dist/index.js` once at startup.
+After changing `src/`, run `npm run build` and restart the client; it loads `dist/index.js` once at startup.
 
 `vitest.config.ts` pins `TZ=Europe/Berlin`. Several tests assert literal `+02:00` timestamps. Do not make those assertions timezone-agnostic — the offset is part of what they verify.
 
@@ -39,7 +39,7 @@ Consequences when working here:
 - Everything above `HelperRunner` is transport-agnostic. `src/tools/*.ts` and `tests/tools.test.ts` depend on that seam — keep the interface `run(command, payload): Promise<unknown>` intact.
 - The first request after a start gets a longer deadline (35s) than later ones (10s), because `serve` waits up to 30s for the TCC answer and a human may need to click a dialog. The two deadlines belong together — changing one without the other breaks first-run setup.
 
-`docs/architecture.md` has the full story. Note that it still describes the LaunchAgent design and is scheduled for rewrite in ACM-4.
+`docs/architecture.md` has the full story, including the measurements behind each choice.
 
 ## Invariants that are easy to break
 
@@ -53,13 +53,13 @@ Consequences when working here:
 
 **`src/freeTime.ts` is pure and has zero imports.** No clock reads, no I/O. That purity is why the project's real test coverage lives there rather than in Swift. Validation errors surface as `INVALID_INPUT` via a re-wrap in `src/tools/findFreeTime.ts`, so `freeTime.ts` itself stays dependency-free.
 
-**Swift error contract:** success is JSON on stdout with exit 0; failure is `{"code":...,"message":...}` on stderr with exit 1. `src/errors.ts` maps every code to German plain language. Adding a Swift error code means adding a message there too.
+**Swift error contract:** success is JSON on stdout with exit 0; failure is `{"code":...,"message":...}` on stderr with exit 1. `src/errors.ts` maps every code to plain English. Adding a Swift error code means adding a message there too, otherwise it falls back to a generic sentence that tells the caller nothing.
 
 ## Dependencies worth knowing
 
 `@modelcontextprotocol/server` **v2** — not the older `@modelcontextprotocol/sdk`. In v2, `registerTool`'s `inputSchema` is a complete `z.object({...})`, not a raw shape. zod is imported as `zod/v4`.
 
-Tool `annotations` are functional: `readOnlyHint: true` is what lets a host run the three read tools without prompting per call. Behavioural guidance for Claude belongs in the server's `instructions` (`src/index.ts`), never in tool descriptions, where it reads as prompt injection.
+Tool `annotations` are functional: `readOnlyHint: true` is what lets a host run the three read tools without prompting per call. Behavioural guidance for the model belongs in the server's `instructions` (`src/index.ts`), never in tool descriptions, where it reads as prompt injection.
 
 ## Code signing
 
