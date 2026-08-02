@@ -12,8 +12,10 @@ npx vitest run tests/freeTime.test.ts     # one file
 npx vitest run -t "ignoriert abgesagte"   # one test by name
 npm run typecheck                         # tsc --noEmit (covers src/ and tests/)
 npm run build                             # tsc -> dist/ (src/ only)
-./swift/build.sh                          # compile + sign bin/calendar-helper
+./swift/build.sh                          # compile + sign bin/calendar-helper (universal)
 ```
+
+`build.sh` builds both `arm64` and `x86_64` against a macOS 14 deployment target and joins them with `lipo`. The binary ships inside the npm package, so an arm64-only build would be broken on Intel Macs — and only at the user's end, never at build time. Signing happens on the finished fat binary; `lipo` would invalidate per-slice signatures anyway.
 
 After changing `swift/main.swift`, run `./swift/build.sh` and restart the client. There is no service to reinstall — the helper is a child process of the MCP server, so the next server start picks up the new binary.
 
