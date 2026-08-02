@@ -87,11 +87,13 @@ func parseDate(_ value: Any?, field: String) throws -> Date {
 /// Stellt sicher, dass Vollzugriff besteht. Bricht sonst mit klarem Fehler ab.
 ///
 /// `timeoutSeconds` ist standardmaessig `nil`: dann wartet der Callback ohne
-/// Frist, was fuer die einshot-Kommandos genau richtig ist — dort sitzt ein
+/// Frist, was fuer die Einzelkommandos genau richtig ist — dort sitzt ein
 /// Mensch vor dem Terminal und sieht den Systemdialog. Der Serve-Modus
-/// uebergibt eine endliche Frist, weil ein LaunchAgent niemanden hat, der den
-/// Dialog anklickt; ohne Frist blieb der Daemon dort beobachtet unauffindbar
-/// haengen (kein Log, kein Exit) statt sichtbar zu scheitern.
+/// uebergibt eine endliche Frist, damit ein unbeantworteter Dialog den
+/// Tool-Aufruf nicht unbegrenzt blockiert: ohne Frist bleibt der Prozess
+/// beobachtet unauffindbar haengen (kein Log, kein Exit) statt sichtbar zu
+/// scheitern. Der Node-Layer raeumt der ersten Anfrage nach dem Start
+/// entsprechend mehr Zeit ein — beide Fristen gehoeren zusammen.
 func ensureAccess(_ store: EKEventStore, timeoutSeconds: Double? = nil) {
     switch EKEventStore.authorizationStatus(for: .event) {
     case .fullAccess:
@@ -427,7 +429,7 @@ func commandCreateEvent() -> Never {
     }
 }
 
-// MARK: - Serve: gemeinsamer Dispatcher (einshot und Socket-Server nutzen dieselbe Logik)
+// MARK: - Gemeinsamer Dispatcher (Einzelkommando und Serve-Modus nutzen dieselbe Logik)
 
 /// Fuehrt ein Kommando aus und liefert dessen Ergebnis-Payload oder wirft
 /// einen HelperError — nie `exit()`. Setzt voraus, dass der Zugriff bereits
@@ -447,10 +449,16 @@ func executeCommand(_ command: String, payload: [String: Any], store: EKEventSto
     }
 }
 
-// MARK: - Serve: Socket-Protokoll
+// MARK: - Serve: Zeilenprotokoll
 
-/// Eine Zeile Request-JSON: {"command":"...","payload":{...}}
+/// Eine Zeile Request-JSON: {"id":1,"command":"...","payload":{...}}
+///
+/// `id` ist optional und wird unveraendert in die Antwort gespiegelt. Der
+/// Serve-Loop arbeitet strikt sequenziell, die Zuordnung waere also auch ohne
+/// sie eindeutig — sie macht eine Desynchronisation aber zu einem lauten
+/// Fehler statt zu einer stillen Vertauschung von Antworten.
 struct ServeRequest {
+    let id: Any?
     let command: String
     let payload: [String: Any]
 }
@@ -476,7 +484,7 @@ func parseServeRequest(_ line: String) throws -> ServeRequest {
         }
         payload = dict
     }
-    return ServeRequest(command: command, payload: payload)
+    return ServeRequest(id: dictionary["id"], command: command, payload: payload)
 }
 
 /// Baut die {"ok":true,"result":...} / {"ok":false,"error":{...}} Huelle und
@@ -491,9 +499,13 @@ func encodeServeResponse(_ object: [String: Any]) -> Data {
 }
 
 func handleServeLine(_ line: String, store: EKEventStore) -> Data {
-    let responseObject: [String: Any]
+    // Scheitert schon das Parsen, ist die ID unbekannt und bleibt weg. Der
+    // Aufrufer ordnet eine Antwort ohne ID der aeltesten offenen Anfrage zu.
+    var requestId: Any?
+    var responseObject: [String: Any]
     do {
         let request = try parseServeRequest(line)
+        requestId = request.id
         let result = try executeCommand(request.command, payload: request.payload, store: store)
         responseObject = ["ok": true, "result": result]
     } catch let error as HelperError {
@@ -501,37 +513,29 @@ func handleServeLine(_ line: String, store: EKEventStore) -> Data {
     } catch {
         responseObject = ["ok": false, "error": ["code": "INTERNAL_ERROR", "message": "Unerwarteter Fehler: \(error.localizedDescription)"]]
     }
+    if let requestId = requestId {
+        responseObject["id"] = requestId
+    }
     return encodeServeResponse(responseObject)
 }
 
-// MARK: - Serve: Unix-Domain-Socket
+// MARK: - Serve: stdio
 
-/// Schreibt eine Zeile auf stderr. In serve wandert stderr ins LaunchAgent-Log;
-/// stdout bleibt in diesem Modus komplett stumm.
+/// Schreibt eine Zeile auf stderr. stdout traegt im Serve-Modus ausschliesslich
+/// das Zeilenprotokoll — eine Diagnosezeile dort wuerde die Antwort
+/// korrumpieren, die der Node-Layer parst.
 func serveLog(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
-func defaultSocketPath() -> String {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    return home.appendingPathComponent("Library/Application Support/apple-calendar-mcp/helper.sock").path
-}
-
-func parseSocketPath(_ arguments: [String]) -> String {
-    if let index = arguments.firstIndex(of: "--socket"), index + 1 < arguments.count {
-        return arguments[index + 1]
-    }
-    return defaultSocketPath()
-}
-
-/// Liest vom Client-Fd, ruft `handle` fuer jede vollstaendige Zeile auf, bis
-/// die Gegenseite die Verbindung schliesst (EOF) oder ein Lesefehler auftritt.
-func readServeLines(fd: Int32, handle: (String) -> Void) {
+/// Liest von stdin, ruft `handle` fuer jede vollstaendige Zeile auf, bis der
+/// Elternprozess seine Seite schliesst (EOF) oder ein Lesefehler auftritt.
+func readStdinLines(handle: (String) -> Void) {
     var buffer = Data()
     var chunk = [UInt8](repeating: 0, count: 4096)
     while true {
         let bytesRead = chunk.withUnsafeMutableBytes { pointer -> Int in
-            recv(fd, pointer.baseAddress, pointer.count, 0)
+            read(STDIN_FILENO, pointer.baseAddress, pointer.count)
         }
         if bytesRead <= 0 { break }
         buffer.append(contentsOf: chunk[0..<bytesRead])
@@ -548,173 +552,121 @@ func readServeLines(fd: Int32, handle: (String) -> Void) {
     }
 }
 
-/// Schreibt die komplette Antwort auf den Client-Fd. SIGPIPE ist global
-/// ignoriert; ein `send`-Fehler (z. B. EPIPE, weil der Client schon weg ist)
-/// wird hier einfach als "nichts mehr zu tun" behandelt statt den Prozess zu
-/// gefaehrden.
-func writeServeResponse(fd: Int32, data: Data) {
-    data.withUnsafeBytes { rawBuffer in
-        guard let base = rawBuffer.baseAddress else { return }
-        var offset = 0
-        let total = rawBuffer.count
-        while offset < total {
-            let sent = send(fd, base.advanced(by: offset), total - offset, 0)
-            if sent <= 0 { break }
-            offset += sent
-        }
-    }
-}
-
-func handleServeConnection(fd: Int32, store: EKEventStore) {
-    readServeLines(fd: fd) { line in
-        let response = handleServeLine(line, store: store)
-        writeServeResponse(fd: fd, data: response)
-    }
-}
-
-/// Baut ein `sockaddr_un` fuer `path`, oder `nil`, wenn der Pfad nicht in
-/// `sun_path` passt (macOS begrenzt das auf rund 104 Bytes).
-func makeSockaddrUn(_ path: String) -> sockaddr_un? {
-    let pathBytes = Array(path.utf8CString)
-    let maxPathLength = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
-    guard pathBytes.count <= maxPathLength else { return nil }
-
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-    withUnsafeMutablePointer(to: &addr.sun_path) { rawPathPointer in
-        rawPathPointer.withMemoryRebound(to: CChar.self, capacity: maxPathLength) { charPointer in
-            for (index, byte) in pathBytes.enumerated() {
-                charPointer[index] = byte
-            }
-        }
-    }
-    return addr
-}
-
-/// Prueft, ob unter `path` bereits ein aktiv horchender Unix-Socket liegt.
-///
-/// Eine Datei am Pfad allein beweist das nicht: `bind()` schlaegt fuer
-/// AF_UNIX mit EADDRINUSE fehl, sobald am Pfad *irgendeine* Datei liegt —
-/// unabhaengig davon, ob dahinter noch ein Prozess horcht. Wuerde man also
-/// unbedingt zuerst `unlink()` aufrufen und sich auf den Bind-Fehler
-/// verlassen, wuerde ein zweiter `serve`-Aufruf einer laengst laufenden
-/// Instanz einfach den Socket-Pfad unter den Fuessen wegziehen (unlink loescht
-/// nur den Verzeichniseintrag, nicht den laufenden Listener) und still einen
-/// zweiten, konkurrierenden Server starten. Ein `connect()`-Sondierungsversuch
-/// unterscheidet zuverlaessig: Er gelingt nur, wenn tatsaechlich noch etwas
-/// horcht; bei einer verwaisten Datei aus einem unsauberen Shutdown scheitert
-/// er mit ECONNREFUSED.
-func isSocketAlive(_ path: String) -> Bool {
-    guard FileManager.default.fileExists(atPath: path) else { return false }
-    guard var addr = makeSockaddrUn(path) else { return false }
-
-    let probeFd = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard probeFd >= 0 else { return false }
-    defer { close(probeFd) }
-
-    let connectResult = withUnsafePointer(to: &addr) { pointer -> Int32 in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-            connect(probeFd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
-        }
-    }
-    return connectResult == 0
-}
-
 /// Wie lange der Serve-Start auf eine TCC-Antwort wartet, bevor er aufgibt.
 /// Lang genug, dass ein Mensch einen Systemdialog bemerken und bestaetigen
-/// kann; kurz genug, dass ein haengender Daemon nicht wie ein toter wirkt.
-/// Das ThrottleInterval des LaunchAgents (60s) sorgt dafuer, dass ein Zugriff,
-/// der erst spaeter erteilt wird, beim naechsten automatischen Neustart wirkt.
+/// kann; kurz genug, dass ein haengender Helper nicht wie ein toter wirkt.
+/// Der Node-Layer raeumt der ERSTEN Anfrage nach dem Start entsprechend mehr
+/// Zeit ein als jeder weiteren — beide Fristen gehoeren zusammen.
 let serveAccessCheckTimeoutSeconds: Double = 30
 
-func commandServe(_ extraArguments: [String]) -> Never {
-    // Ein Client, der mitten im Schreiben trennt, darf den Daemon nicht per
-    // SIGPIPE toeten.
+/// Langlebiger Modus: eine JSON-Zeile Anfrage auf stdin, eine JSON-Zeile
+/// Antwort auf stdout, bis der Elternprozess seine Seite schliesst.
+///
+/// Der Kalenderzugriff wird genau einmal beim Start geprueft — danach setzt
+/// die Request-Verarbeitung ihn als gegeben voraus. Genau dafuer laeuft der
+/// Prozess ueberhaupt langlebig: Prozessstart, Disclaim-Re-exec, Aufbau des
+/// EKEventStore und die TCC-Pruefung fallen einmal an statt bei jedem
+/// Tool-Aufruf.
+func commandServe() -> Never {
+    // Ist der Elternprozess weg, waehrend noch geschrieben wird, darf ein
+    // EPIPE den Helper nicht toeten — das geordnete Ende ist EOF auf stdin.
     signal(SIGPIPE, SIG_IGN)
 
-    let socketPath = parseSocketPath(extraArguments)
-    let socketDirectory = (socketPath as NSString).deletingLastPathComponent
-
-    do {
-        try FileManager.default.createDirectory(atPath: socketDirectory, withIntermediateDirectories: true)
-    } catch {
-        fail("SOCKET_SETUP_FAILED", "Verzeichnis für den Socket konnte nicht angelegt werden: \(error.localizedDescription)")
-    }
-
-    // Vor jedem Aufraeumen pruefen, ob dort bereits eine lebende Instanz
-    // horcht — siehe isSocketAlive(_:) fuer den Grund, warum ein blindes
-    // unlink()+bind() das nicht zuverlaessig erkennen wuerde.
-    if isSocketAlive(socketPath) {
-        fail("SOCKET_IN_USE", "Ein anderer serve-Prozess läuft bereits auf diesem Socket: \(socketPath)")
-    }
-
-    // Eine Socket-Datei aus einem unsauberen vorherigen Shutdown darf das
-    // erneute Binden nicht verhindern.
-    unlink(socketPath)
-
-    // Zugriff wird genau einmal beim Start geprueft — danach setzt die
-    // Request-Verarbeitung ihn als gegeben voraus. Ein Serve-Prozess ohne
-    // Kalenderzugriff ist nutzlos; lautes Scheitern macht den Grund im
-    // LaunchAgent-Log sichtbar. Mit Frist: ein LaunchAgent hat niemanden, der
-    // einen Systemdialog anklickt, und ein Callback, der nie antwortet, darf
-    // den Daemon nicht unsichtbar fuer immer haengen lassen (genau das ist im
-    // ersten echten LaunchAgent-Lauf passiert — kein Log, kein Exit, nur ein
-    // Prozess in semaphore_wait_trap).
     serveLog("calendar-helper: prüfe Kalenderzugriff (Frist \(Int(serveAccessCheckTimeoutSeconds))s)…")
     let store = EKEventStore()
     ensureAccess(store, timeoutSeconds: serveAccessCheckTimeoutSeconds)
-    serveLog("calendar-helper: Kalenderzugriff erteilt.")
+    // PID mitschreiben: Wer im Log nachsieht, warum ein Tool-Aufruf haengt,
+    // will den Prozess auch finden koennen.
+    serveLog("calendar-helper: bereit (PID \(getpid())).")
 
-    let listenFd = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard listenFd >= 0 else {
-        fail("SOCKET_SETUP_FAILED", "Socket konnte nicht erstellt werden: \(String(cString: strerror(errno)))")
+    readStdinLines { line in
+        FileHandle.standardOutput.write(handleServeLine(line, store: store))
     }
 
-    guard var addr = makeSockaddrUn(socketPath) else {
-        fail("SOCKET_SETUP_FAILED", "Der Socket-Pfad ist zu lang: \(socketPath)")
+    // EOF auf stdin: der MCP-Server ist beendet, es kommt nichts mehr.
+    exit(0)
+}
+
+// MARK: - TCC-Selbstverantwortung
+
+/// macOS ordnet die Kalenderberechtigung dem verantwortlichen ELTERNPROZESS
+/// zu, nicht dem aufgerufenen Programm. Ein MCP-Client, der in seinem Bundle
+/// keinen Kalender-Verwendungszweck deklariert, sperrt damit jeden Prozess
+/// aus, den er startet — auch diesen Helper.
+///
+/// `responsibility_spawnattrs_setdisclaim` gibt diese Verantwortung ab: der
+/// neu ausgefuehrte Prozess wird sein EIGENER TCC-Verantwortlicher, und macOS
+/// liest die Usage-Description aus SEINER eingebetteten Info.plist. Dieselbe
+/// private libSystem-API benutzt Chromium fuer seine Helper-Prozesse.
+///
+/// Aufgeloest wird sie per dlsym statt per Link: verschwindet das Symbol in
+/// einem kuenftigen macOS, laeuft der Helper einfach ohne Disclaim weiter —
+/// funktional so gesperrt wie vorher, aber ohne Ladefehler und ohne Absturz.
+func reexecDisclaimed() {
+    let marker = "CALENDAR_HELPER_DISCLAIMED"
+    let debug = ProcessInfo.processInfo.environment["CALENDAR_HELPER_DEBUG"] != nil
+
+    /// Diagnose gehoert auf stderr — stdout traegt ausschliesslich das
+    /// JSON-Protokoll, das der Node-Layer parst.
+    func log(_ message: String) {
+        FileHandle.standardError.write(Data("calendar-helper: disclaim: \(message)\n".utf8))
     }
 
-    let bindResult = withUnsafePointer(to: &addr) { pointer -> Int32 in
-        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-            bind(listenFd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
-        }
+    // Marker gesetzt? Dann ist dies bereits der ersetzte Prozess. Ohne diese
+    // Abbruchbedingung wuerde sich der Helper endlos selbst ersetzen.
+    guard ProcessInfo.processInfo.environment[marker] == nil else { return }
+
+    // RTLD_DEFAULT ist auf Darwin ((void *) -2).
+    let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+    guard let symbol = dlsym(rtldDefault, "responsibility_spawnattrs_setdisclaim") else {
+        if debug { log("Symbol nicht vorhanden — weiter ohne") }
+        return
+    }
+    typealias SetDisclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+    let setDisclaim = unsafeBitCast(symbol, to: SetDisclaim.self)
+
+    guard let executable = Bundle.main.executablePath else {
+        if debug { log("eigener Pfad nicht ermittelbar — weiter ohne") }
+        return
     }
 
-    guard bindResult == 0 else {
-        // Enger Restfall: zwei Instanzen starten praktisch gleichzeitig und
-        // race zwischen der isSocketAlive-Pruefung und diesem bind(). Auch
-        // dann klar melden statt um den Socket zu kaempfen.
-        let bindErrno = errno
-        if bindErrno == EADDRINUSE {
-            fail("SOCKET_IN_USE", "Ein anderer serve-Prozess läuft bereits auf diesem Socket: \(socketPath)")
-        }
-        fail("SOCKET_SETUP_FAILED", "Socket konnte nicht gebunden werden: \(String(cString: strerror(bindErrno)))")
+    var attributes: posix_spawnattr_t?
+    guard posix_spawnattr_init(&attributes) == 0 else { return }
+    defer { posix_spawnattr_destroy(&attributes) }
+
+    // POSIX_SPAWN_SETEXEC ersetzt dieses Prozessabbild an Ort und Stelle.
+    // Ohne das Flag wuerde posix_spawn ein Kind erzeugen und dieser Prozess
+    // liefe daneben weiter — zwei Prozesse, von denen einer nichts tut.
+    guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC)) == 0 else { return }
+    _ = setDisclaim(&attributes, 1)
+
+    var environment = ProcessInfo.processInfo.environment
+    environment[marker] = "1"
+
+    var cArguments: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) }
+    cArguments.append(nil)
+    var cEnvironment: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") }
+    cEnvironment.append(nil)
+    defer {
+        for pointer in cArguments where pointer != nil { free(pointer) }
+        for pointer in cEnvironment where pointer != nil { free(pointer) }
     }
 
-    // Unauthentifizierter lokaler Kontrollkanal — nur der Besitzer darf
-    // schreiben (und damit Kommandos senden).
-    guard chmod(socketPath, 0o600) == 0 else {
-        fail("SOCKET_SETUP_FAILED", "Dateirechte des Sockets konnten nicht gesetzt werden: \(String(cString: strerror(errno)))")
-    }
+    if debug { log("ersetze Prozessabbild (\(executable))") }
 
-    guard listen(listenFd, 8) == 0 else {
-        fail("SOCKET_SETUP_FAILED", "Socket konnte nicht auf Verbindungen horchen: \(String(cString: strerror(errno)))")
-    }
+    var pid: pid_t = 0
+    let result = posix_spawn(&pid, executable, nil, &attributes, &cArguments, &cEnvironment)
 
-    serveLog("calendar-helper: horcht auf \(socketPath)")
-
-    while true {
-        let clientFd = accept(listenFd, nil, nil)
-        if clientFd < 0 {
-            serveLog("calendar-helper: accept fehlgeschlagen: \(String(cString: strerror(errno)))")
-            continue
-        }
-        handleServeConnection(fd: clientFd, store: store)
-        close(clientFd)
-    }
+    // Mit SETEXEC kehrt ein erfolgreicher Spawn NIE zurueck. Alles ab hier
+    // bedeutet, dass der Austausch gescheitert ist.
+    log("fehlgeschlagen (\(String(cString: strerror(result)))) — weiter ohne")
 }
 
 // MARK: - Dispatch
+
+// Muss vor jedem EventKit-Zugriff stehen: nach dem Austausch beginnt der
+// Prozess von vorn, und alles davor liefe zweimal.
+reexecDisclaimed()
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
@@ -731,7 +683,7 @@ case "list-events":
 case "create-event":
     commandCreateEvent()
 case "serve":
-    commandServe(Array(arguments.dropFirst(2)))
+    commandServe()
 default:
     fail("INVALID_INPUT", "Unbekanntes Kommando: \(arguments[1])")
 }

@@ -1,9 +1,31 @@
 {
-  "name": "apple-calendar-mcp",
+  "name": "@redpop/apple-calendar-mcp",
   "version": "0.1.0",
-  "description": "Local MCP server for Apple Calendar via EventKit (macOS only)",
+  "mcpName": "io.github.redpop/apple-calendar-mcp",
+  "description": "MCP server for Apple Calendar on macOS: read events, create them, and find free time — via EventKit, with a permission grant that survives updates",
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "apple-calendar",
+    "calendar",
+    "eventkit",
+    "macos",
+    "scheduling",
+    "free-time"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redpop/apple-calendar-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/redpop/apple-calendar-mcp/issues"
+  },
+  "homepage": "https://github.com/redpop/apple-calendar-mcp#readme",
+  "os": [
+    "darwin"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -12,12 +34,13 @@
   },
   "files": [
     "dist",
+    "bin",
     "swift",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "build:helper": "bash swift/build.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

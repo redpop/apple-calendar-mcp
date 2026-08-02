@@ -8,13 +8,42 @@ BUNDLE_ID="io.github.apple-calendar-mcp.calendar-helper"
 
 mkdir -p "$OUT_DIR"
 
-swiftc "$SCRIPT_DIR/main.swift" \
-  -O \
-  -o "$BINARY" \
-  -Xlinker -sectcreate \
-  -Xlinker __TEXT \
-  -Xlinker __info_plist \
-  -Xlinker "$SCRIPT_DIR/Info.plist"
+# Deployment-Target: macOS 14 ist das Minimum, das der Code ohnehin verlangt
+# (requestFullAccessToEvents und der #available-Guard in main.swift). Es
+# explizit anzugeben ist noetig, sobald fuer eine fremde Architektur gebaut
+# wird — und haelt gleichzeitig fest, wogegen gebaut wurde, statt es von der
+# gerade installierten SDK-Version abhaengen zu lassen.
+DEPLOYMENT_TARGET="14.0"
+
+# Universal, nicht nur fuer die laufende Architektur: Das Binary wird als Teil
+# des npm-Pakets ausgeliefert und muss dort auch auf Intel-Macs laufen. Ein
+# Paket, das nur arm64 enthaelt, waere auf aelteren Geraeten schlicht kaputt —
+# und zwar erst beim Nutzer, nicht beim Bauen.
+build_slice() {
+  local arch="$1"
+  local output="$2"
+  swiftc "$SCRIPT_DIR/main.swift" \
+    -O \
+    -target "${arch}-apple-macosx${DEPLOYMENT_TARGET}" \
+    -o "$output" \
+    -Xlinker -sectcreate \
+    -Xlinker __TEXT \
+    -Xlinker __info_plist \
+    -Xlinker "$SCRIPT_DIR/Info.plist"
+}
+
+SLICE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SLICE_DIR"' EXIT
+
+build_slice arm64 "$SLICE_DIR/calendar-helper-arm64"
+build_slice x86_64 "$SLICE_DIR/calendar-helper-x86_64"
+
+# Signiert wird erst das fertige Fat Binary: lipo wuerde eine Signatur der
+# einzelnen Slices ohnehin ungueltig machen.
+lipo -create \
+  "$SLICE_DIR/calendar-helper-arm64" \
+  "$SLICE_DIR/calendar-helper-x86_64" \
+  -output "$BINARY"
 
 # Signatur: Die Kalenderberechtigung (TCC) haengt an der Code-Identitaet.
 #
