@@ -28,7 +28,7 @@ func fail(_ code: String, _ message: String) -> Never {
 /// Schreibt das Ergebnis als JSON auf stdout und beendet mit Exit-Code 0.
 func emit(_ object: [String: Any]) -> Never {
     guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
-        fail("SAVE_FAILED", "Die Antwort konnte nicht als JSON kodiert werden.")
+        fail("SAVE_FAILED", "The response could not be encoded as JSON.")
     }
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))
@@ -42,7 +42,7 @@ func readPayload() -> [String: Any] {
     guard !data.isEmpty else { return [:] }
     guard let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any] else {
-        fail("INVALID_INPUT", "stdin enthielt kein gültiges JSON-Objekt.")
+        fail("INVALID_INPUT", "stdin did not contain a valid JSON object.")
     }
     return dictionary
 }
@@ -75,11 +75,11 @@ let dayFormatter: DateFormatter = {
 
 func parseDate(_ value: Any?, field: String) throws -> Date {
     guard let text = value as? String else {
-        throw HelperError(code: "INVALID_INPUT", message: "Feld '\(field)' fehlt oder ist kein String.")
+        throw HelperError(code: "INVALID_INPUT", message: "Field '\(field)' is missing or not a string.")
     }
     if let date = isoOut.date(from: text) { return date }
     if let date = isoWithFraction.date(from: text) { return date }
-    throw HelperError(code: "INVALID_INPUT", message: "Feld '\(field)' ist kein gültiges ISO-8601-Datum mit Offset: \(text)")
+    throw HelperError(code: "INVALID_INPUT", message: "Field '\(field)' is not a valid ISO 8601 date with offset: \(text)")
 }
 
 // MARK: - Berechtigung
@@ -99,9 +99,9 @@ func ensureAccess(_ store: EKEventStore, timeoutSeconds: Double? = nil) {
     case .fullAccess:
         return
     case .restricted:
-        fail("PERMISSION_RESTRICTED", "Der Kalenderzugriff ist durch Systemrichtlinien gesperrt.")
+        fail("PERMISSION_RESTRICTED", "Calendar access is blocked by a system policy.")
     case .denied:
-        fail("PERMISSION_DENIED", "Kalenderzugriff wurde verweigert. Aktiviere ihn unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender.")
+        fail("PERMISSION_DENIED", "Calendar access was denied. Enable it under System Settings > Privacy & Security > Calendars.")
     default:
         // Faengt sowohl .notDetermined (noch nie gefragt) als auch .writeOnly
         // (nur "Nur Hinzufuegen" erteilt) ab — beide muessen zur vollen
@@ -112,7 +112,7 @@ func ensureAccess(_ store: EKEventStore, timeoutSeconds: Double? = nil) {
     }
 
     guard #available(macOS 14.0, *) else {
-        fail("PERMISSION_RESTRICTED", "Dieses Hilfsprogramm benötigt macOS 14 oder neuer.")
+        fail("PERMISSION_RESTRICTED", "This helper requires macOS 14 or newer.")
     }
 
     // Ein CLI-Prozess hat keinen RunLoop — der Callback muss per Semaphore abgewartet werden.
@@ -130,14 +130,14 @@ func ensureAccess(_ store: EKEventStore, timeoutSeconds: Double? = nil) {
             // unterschieden: dort hat TCC klar geantwortet, hier hat gar
             // niemand geantwortet (kein Dialog erschien oder ihn beantwortet
             // hat). Diese Unterscheidung ist der ganze Sinn der Frist.
-            fail("PERMISSION_TIMEOUT", "Kalenderzugriff wurde innerhalb von \(Int(timeoutSeconds)) Sekunden weder erteilt noch verweigert — es kam keine Antwort auf die Anfrage (moeglicherweise erschien gar kein Dialog). Starte den Dienst erneut, nachdem der Zugriff unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender erteilt wurde.")
+            fail("PERMISSION_TIMEOUT", "Calendar access was neither granted nor denied within \(Int(timeoutSeconds)) seconds — nothing answered the request, possibly because no dialog appeared. Retry after granting access under System Settings > Privacy & Security > Calendars.")
         }
     } else {
         semaphore.wait()
     }
 
     if !granted {
-        fail("PERMISSION_DENIED", "Kalenderzugriff wurde nicht erteilt. Aktiviere ihn unter Systemeinstellungen → Datenschutz & Sicherheit → Kalender.")
+        fail("PERMISSION_DENIED", "Calendar access was not granted. Enable it under System Settings > Privacy & Security > Calendars.")
     }
 }
 
@@ -267,7 +267,7 @@ func resolveCalendars(_ ids: Any?, store: EKEventStore) throws -> [EKCalendar]? 
     var picked: [EKCalendar] = []
     for id in ids {
         guard let match = all.first(where: { $0.calendarIdentifier == id }) else {
-            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "Ein Kalender mit der ID '\(id)' existiert nicht.")
+            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "No calendar with identifier '\(id)' exists.")
         }
         picked.append(match)
     }
@@ -280,7 +280,7 @@ func performListEvents(payload: [String: Any], store: EKEventStore) throws -> [S
     let start = try parseDate(payload["start"], field: "start")
     let end = try parseDate(payload["end"], field: "end")
     guard end > start else {
-        throw HelperError(code: "INVALID_INPUT", message: "'end' muss nach 'start' liegen.")
+        throw HelperError(code: "INVALID_INPUT", message: "'end' must be after 'start'.")
     }
 
     let calendars = try resolveCalendars(payload["calendarIds"], store: store)
@@ -327,7 +327,7 @@ func commandListEvents() -> Never {
     } catch let error as HelperError {
         fail(error.code, error.message)
     } catch {
-        fail("INTERNAL_ERROR", "Unerwarteter Fehler: \(error.localizedDescription)")
+        fail("INTERNAL_ERROR", "Unexpected error: \(error.localizedDescription)")
     }
 }
 
@@ -346,13 +346,13 @@ func alarmOffset(minutesBefore: Int, allDay: Bool) -> TimeInterval {
 
 func performCreateEvent(payload: [String: Any], store: EKEventStore) throws -> [String: Any] {
     guard let title = (payload["title"] as? String), !title.isEmpty else {
-        throw HelperError(code: "INVALID_INPUT", message: "Feld 'title' fehlt oder ist leer.")
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'title' is missing or empty.")
     }
 
     let start = try parseDate(payload["start"], field: "start")
     var end = try parseDate(payload["end"], field: "end")
     guard end >= start else {
-        throw HelperError(code: "INVALID_INPUT", message: "'end' darf nicht vor 'start' liegen.")
+        throw HelperError(code: "INVALID_INPUT", message: "'end' must not be before 'start'.")
     }
 
     let allDay = (payload["allDay"] as? Bool) ?? false
@@ -375,18 +375,18 @@ func performCreateEvent(payload: [String: Any], store: EKEventStore) throws -> [
     let calendar: EKCalendar
     if let id = payload["calendarId"] as? String {
         guard let match = store.calendars(for: .event).first(where: { $0.calendarIdentifier == id }) else {
-            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "Ein Kalender mit der ID '\(id)' existiert nicht.")
+            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "No calendar with identifier '\(id)' exists.")
         }
         calendar = match
     } else {
         guard let fallback = store.defaultCalendarForNewEvents else {
-            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "Es ist kein Standardkalender für neue Termine konfiguriert.")
+            throw HelperError(code: "CALENDAR_NOT_FOUND", message: "No default calendar for new events is configured.")
         }
         calendar = fallback
     }
 
     guard calendar.allowsContentModifications else {
-        throw HelperError(code: "CALENDAR_READONLY", message: "Der Kalender '\(calendar.title)' erlaubt keine Änderungen.")
+        throw HelperError(code: "CALENDAR_READONLY", message: "Calendar '\(calendar.title)' does not allow modifications.")
     }
 
     let event = EKEvent(eventStore: store)
@@ -409,7 +409,7 @@ func performCreateEvent(payload: [String: Any], store: EKEventStore) throws -> [
     do {
         try store.save(event, span: .thisEvent, commit: true)
     } catch {
-        throw HelperError(code: "SAVE_FAILED", message: "Der Termin konnte nicht gespeichert werden: \(error.localizedDescription)")
+        throw HelperError(code: "SAVE_FAILED", message: "The event could not be saved: \(error.localizedDescription)")
     }
 
     return ["event": serializeEvent(event)]
@@ -425,7 +425,7 @@ func commandCreateEvent() -> Never {
     } catch let error as HelperError {
         fail(error.code, error.message)
     } catch {
-        fail("INTERNAL_ERROR", "Unerwarteter Fehler: \(error.localizedDescription)")
+        fail("INTERNAL_ERROR", "Unexpected error: \(error.localizedDescription)")
     }
 }
 
@@ -445,7 +445,7 @@ func executeCommand(_ command: String, payload: [String: Any], store: EKEventSto
     case "create-event":
         return try performCreateEvent(payload: payload, store: store)
     default:
-        throw HelperError(code: "INVALID_INPUT", message: "Unbekanntes Kommando: \(command)")
+        throw HelperError(code: "INVALID_INPUT", message: "Unknown command: \(command)")
     }
 }
 
@@ -465,14 +465,14 @@ struct ServeRequest {
 
 func parseServeRequest(_ line: String) throws -> ServeRequest {
     guard let data = line.data(using: .utf8) else {
-        throw HelperError(code: "INVALID_INPUT", message: "Zeile konnte nicht als UTF-8 gelesen werden.")
+        throw HelperError(code: "INVALID_INPUT", message: "Line could not be decoded as UTF-8.")
     }
     guard let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any] else {
-        throw HelperError(code: "INVALID_INPUT", message: "Zeile enthielt kein gültiges JSON-Objekt.")
+        throw HelperError(code: "INVALID_INPUT", message: "Line did not contain a valid JSON object.")
     }
     guard let command = dictionary["command"] as? String else {
-        throw HelperError(code: "INVALID_INPUT", message: "Feld 'command' fehlt oder ist kein String.")
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'command' is missing or not a string.")
     }
     let payload: [String: Any]
     switch dictionary["payload"] {
@@ -480,7 +480,7 @@ func parseServeRequest(_ line: String) throws -> ServeRequest {
         payload = [:]
     case .some(let value):
         guard let dict = value as? [String: Any] else {
-            throw HelperError(code: "INVALID_INPUT", message: "Feld 'payload' muss ein JSON-Objekt sein.")
+            throw HelperError(code: "INVALID_INPUT", message: "Field 'payload' must be a JSON object.")
         }
         payload = dict
     }
@@ -511,7 +511,7 @@ func handleServeLine(_ line: String, store: EKEventStore) -> Data {
     } catch let error as HelperError {
         responseObject = ["ok": false, "error": ["code": error.code, "message": error.message]]
     } catch {
-        responseObject = ["ok": false, "error": ["code": "INTERNAL_ERROR", "message": "Unerwarteter Fehler: \(error.localizedDescription)"]]
+        responseObject = ["ok": false, "error": ["code": "INTERNAL_ERROR", "message": "Unexpected error: \(error.localizedDescription)"]]
     }
     if let requestId = requestId {
         responseObject["id"] = requestId
@@ -572,12 +572,12 @@ func commandServe() -> Never {
     // EPIPE den Helper nicht toeten — das geordnete Ende ist EOF auf stdin.
     signal(SIGPIPE, SIG_IGN)
 
-    serveLog("calendar-helper: prüfe Kalenderzugriff (Frist \(Int(serveAccessCheckTimeoutSeconds))s)…")
+    serveLog("calendar-helper: checking calendar access (deadline \(Int(serveAccessCheckTimeoutSeconds))s)…")
     let store = EKEventStore()
     ensureAccess(store, timeoutSeconds: serveAccessCheckTimeoutSeconds)
     // PID mitschreiben: Wer im Log nachsieht, warum ein Tool-Aufruf haengt,
     // will den Prozess auch finden koennen.
-    serveLog("calendar-helper: bereit (PID \(getpid())).")
+    serveLog("calendar-helper: ready (PID \(getpid())).")
 
     readStdinLines { line in
         FileHandle.standardOutput.write(handleServeLine(line, store: store))
@@ -670,7 +670,7 @@ reexecDisclaimed()
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("INVALID_INPUT", "Kein Kommando angegeben. Erwartet: check-access, list-calendars, list-events, create-event, serve.")
+    fail("INVALID_INPUT", "No command given. Expected one of: check-access, list-calendars, list-events, create-event, serve.")
 }
 
 switch arguments[1] {
@@ -685,5 +685,5 @@ case "create-event":
 case "serve":
     commandServe()
 default:
-    fail("INVALID_INPUT", "Unbekanntes Kommando: \(arguments[1])")
+    fail("INVALID_INPUT", "Unknown command: \(arguments[1])")
 }

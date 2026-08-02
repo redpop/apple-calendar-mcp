@@ -10,10 +10,10 @@ export function registerFindFreeTime(server: McpServer, runner: HelperRunner): v
     'find_free_time',
     {
       description:
-        'Findet freie Zeitfenster von mindestens durationMinutes Länge. activityDomain steuert Tage und Uhrzeiten gemeinsam: work bedeutet Mo bis Fr von 09:00 bis 18:00, personal alle Tage zu denselben Zeiten, unrestricted alle Tage rund um die Uhr. workingHours überschreibt nur die Uhrzeiten. Liefert freie Lücken, nicht die belegten Termine — für die ist list_events zuständig. Legt nichts an.',
+        'Finds free slots of at least durationMinutes. activityDomain controls days and hours together: work means Mon-Fri 09:00-18:00, personal every day at the same hours, unrestricted every day around the clock. workingHours overrides only the hours. Returns the free gaps, not the busy events — use list_events for those. Creates nothing.',
       inputSchema: findFreeTimeInput,
       annotations: {
-        title: 'Freie Zeit finden',
+        title: 'Find free time',
         readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: false,

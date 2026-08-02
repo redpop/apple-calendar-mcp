@@ -2,77 +2,77 @@ import * as z from 'zod/v4'
 
 /**
  * Bewusst keine strenge Regex: Date.parse deckt alle ISO-8601-Varianten ab,
- * die EventKit liefert, und die Fehlermeldung bleibt fuer Claude verstaendlich.
+ * die EventKit liefert, und die Fehlermeldung bleibt verstaendlich.
  */
 const isoDateTime = z
   .string()
   .refine((value) => !Number.isNaN(Date.parse(value)), {
     message:
-      'Muss ein ISO-8601-Zeitpunkt mit Zeitzonen-Offset sein, zum Beispiel 2026-08-05T10:00:00+02:00',
+      'Must be an ISO 8601 timestamp with a timezone offset, for example 2026-08-05T10:00:00+02:00',
   })
 
 const clockTime = z
   .string()
-  .regex(/^\d{2}:\d{2}$/, 'Muss im Format HH:MM vorliegen, zum Beispiel 09:00')
+  .regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format, for example 09:00')
 
 // MARK: Tool-Eingaben
 
 export const listCalendarsInput = z.object({})
 
 export const listEventsInput = z.object({
-  start: isoDateTime.describe('Beginn des Zeitraums, ISO 8601 mit Offset'),
-  end: isoDateTime.describe('Ende des Zeitraums, ISO 8601 mit Offset'),
-  calendarIds: z.array(z.string()).optional().describe('Nur diese Kalender; Standard: alle'),
-  query: z.string().optional().describe('Freitextfilter auf Titel und Notizen'),
+  start: isoDateTime.describe('Start of the range, ISO 8601 with offset'),
+  end: isoDateTime.describe('End of the range, ISO 8601 with offset'),
+  calendarIds: z.array(z.string()).optional().describe('Restrict to these calendars. Defaults to all of them.'),
+  query: z.string().optional().describe('Free-text filter applied to titles and notes'),
   maxResults: z
     .number()
     .int()
     .positive()
     .default(200)
-    .describe('Obergrenze der zurückgegebenen Termine'),
+    .describe('Maximum number of events to return'),
 })
 
 export const createEventInput = z.object({
-  title: z.string().min(1).describe('Titel des Termins'),
-  start: isoDateTime.describe('Beginn, ISO 8601 mit Offset'),
+  title: z.string().min(1).describe('Title of the event'),
+  start: isoDateTime.describe('Start, ISO 8601 with offset'),
   end: isoDateTime.describe(
-    'Ende, ISO 8601 mit Offset. Bei ganztägigen Terminen (allDay: true) sind beide gängigen Schreibweisen zulässig und werden auf denselben Tag normalisiert: der letzte eingeschlossene Tag (z. B. …T23:59:59) oder Mitternacht des Folgetages (…T00:00:00 des nächsten Datums).',
+    'End, ISO 8601 with offset. For all-day events (allDay: true) both common conventions are accepted and normalised to the same day: the last day included (…T23:59:59) or midnight of the following day (…T00:00:00 of the next date).',
   ),
-  calendarId: z.string().optional().describe('Zielkalender; Standard: Standardkalender'),
+  calendarId: z.string().optional().describe('Calendar to create the event in. Defaults to the system default calendar.'),
   allDay: z
     .boolean()
     .default(false)
-    .describe('Ganztägiger Termin. Bei true zählen nur die Kalendertage von start und end.'),
-  location: z.string().optional().describe('Ortsangabe, wie sie in Calendar.app erscheint'),
-  notes: z.string().optional().describe('Freitext-Notiz zum Termin'),
-  url: z.string().optional().describe('Verknüpfte Adresse, zum Beispiel ein Meeting-Link'),
+    .describe('All-day event. When true, only the calendar days of start and end are used.'),
+  location: z.string().optional().describe('Location, as shown in Calendar.app'),
+  notes: z.string().optional().describe('Free-text note attached to the event'),
+  url: z.string().optional().describe('Associated URL, for example a meeting link'),
   alarmMinutesBefore: z
     .array(z.number().int().nonnegative())
     .optional()
     .describe(
-      'Erinnerungen in Minuten vor Beginn. Bei ganztägigen Terminen auf ganze Tage abgerundet und auf 09:00 gelegt, wie in Calendar.app.',
+      'Alarms in minutes before the start. For all-day events these are floored to whole days and placed at 09:00, matching Calendar.app.',
     ),
 })
 
 export const findFreeTimeInput = z.object({
-  start: isoDateTime.describe('Beginn des Suchfensters'),
-  end: isoDateTime.describe('Ende des Suchfensters'),
-  durationMinutes: z.number().int().positive().describe('Benötigte Dauer in Minuten'),
-  calendarIds: z.array(z.string()).optional().describe('Diese Kalender gelten als belegt'),
+  start: isoDateTime.describe('Start of the search window'),
+  end: isoDateTime.describe('End of the search window'),
+  durationMinutes: z.number().int().positive().describe('Required duration in minutes'),
+  calendarIds: z.array(z.string()).optional().describe('Treat these calendars as busy. Defaults to all of them.'),
   activityDomain: z
     .enum(['work', 'personal', 'unrestricted'])
     .default('work')
     .describe(
-      'work: Mo–Fr 09:00–18:00. personal: alle Tage 09:00–18:00. unrestricted: alle Tage rund um die Uhr.',
+      'work: Mon-Fri 09:00-18:00. personal: every day 09:00-18:00. unrestricted: every day, around the clock.',
     ),
   workingHours: z
     .object({ start: clockTime, end: clockTime })
     .optional()
-    .describe('Überschreibt nur die Uhrzeiten der activityDomain, nicht die Tagesauswahl'),
+    .describe('Overrides only the hours of the activityDomain, not which days it covers'),
   ignoreAllDay: z
     .boolean()
     .default(true)
-    .describe('Ganztägige Termine zählen nicht als belegt'),
+    .describe('All-day events do not count as busy'),
 })
 
 // MARK: Antworten der Swift-CLI

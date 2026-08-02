@@ -109,7 +109,7 @@ function dayWindows(rangeStart: Date, rangeEnd: Date, options: FreeTimeOptions):
       : profile.to
 
   if (to <= from) {
-    throw new Error('workingHours.end muss nach workingHours.start liegen.')
+    throw new Error('workingHours.end must be after workingHours.start.')
   }
 
   const windows: Span[] = []
@@ -150,20 +150,20 @@ export function validateFreeTimeInput(options: FreeTimeOptions): string | undefi
   const rangeEnd = new Date(options.end)
 
   if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
-    return 'start und end müssen gültige ISO-8601-Zeitpunkte sein.'
+    return 'start and end must be valid ISO 8601 timestamps.'
   }
   if (rangeEnd.getTime() <= rangeStart.getTime()) {
-    return 'end muss nach start liegen.'
+    return 'end must be after start.'
   }
   if (options.durationMinutes <= 0) {
-    return 'durationMinutes muss größer als null sein.'
+    return 'durationMinutes must be greater than zero.'
   }
   if (options.workingHours !== undefined) {
     try {
       const from = parseClock(options.workingHours.start, 'workingHours.start')
       const to = parseClock(options.workingHours.end, 'workingHours.end')
       if (to <= from) {
-        return 'workingHours.end muss nach workingHours.start liegen.'
+        return 'workingHours.end must be after workingHours.start.'
       }
     } catch (error) {
       return error instanceof Error ? error.message : String(error)

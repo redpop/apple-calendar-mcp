@@ -212,8 +212,8 @@ describe('find_free_time', () => {
     })
 
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('ungültig')
-    expect(result.content[0].text).not.toContain('unerwarteter Fehler')
+    expect(result.content[0].text).toContain('invalid')
+    expect(result.content[0].text).not.toContain('unexpected error')
     expect(calls).toHaveLength(0)
   })
 })
@@ -228,7 +228,7 @@ describe('Fehlerbehandlung', () => {
     const result = await tool?.callback({})
 
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('Datenschutz & Sicherheit')
+    expect(result.content[0].text).toContain('Privacy & Security')
     expect(result.content[0].text).not.toContain('    at ')
   })
 
@@ -241,7 +241,7 @@ describe('Fehlerbehandlung', () => {
     const result = await tool?.callback({})
 
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('unerwarteter Fehler')
+    expect(result.content[0].text).toContain('unexpected error')
   })
 
   it('meldet eine Antwort der CLI, die nicht zum Schema passt, als Fehler', async () => {

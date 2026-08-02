@@ -7,8 +7,8 @@
   <key>CFBundleName</key>
   <string>calendar-helper</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
-  <string>Dieses Hilfsprogramm liest und schreibt Termine in deinem Kalender, damit Claude sie abfragen und anlegen kann.</string>
+  <string>Lets your AI assistant read your events, create new ones, and find free time in your calendar.</string>
   <key>NSCalendarsUsageDescription</key>
-  <string>Dieses Hilfsprogramm liest und schreibt Termine in deinem Kalender, damit Claude sie abfragen und anlegen kann.</string>
+  <string>Lets your AI assistant read your events, create new ones, and find free time in your calendar.</string>
 </dict>
 </plist>

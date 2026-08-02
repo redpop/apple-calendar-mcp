@@ -8,10 +8,10 @@ export function registerListEvents(server: McpServer, runner: HelperRunner): voi
     'list_events',
     {
       description:
-        'Liest Termine in einem Zeitraum. Wiederholungstermine werden als einzelne Instanzen zurückgegeben. Ganztägige Termine tragen zusätzlich startDay und endDay als reine Datumsangaben, wobei endDay den letzten enthaltenen Tag meint. Ändert nichts. Für freie Zeitfenster statt belegter Termine ist find_free_time zuständig.',
+        'Reads events in a date range. Recurring events are returned as individual occurrences. All-day events additionally carry startDay and endDay as plain dates, where endDay means the last day included. Changes nothing. For free gaps rather than busy events, use find_free_time.',
       inputSchema: listEventsInput,
       annotations: {
-        title: 'Termine lesen',
+        title: 'Read events',
         readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: false,

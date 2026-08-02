@@ -8,10 +8,10 @@ export function registerCreateEvent(server: McpServer, runner: HelperRunner): vo
     'create_event',
     {
       description:
-        'Legt einen neuen Termin an. Ohne calendarId wird der Standardkalender verwendet. Schreibgeschützte Kalender werden abgelehnt. Bei ganztägigen Terminen werden Erinnerungen auf ganze Tage abgerundet und wie in Calendar.app auf 09:00 gelegt. Ändert oder löscht keine bestehenden Termine — beides ist derzeit nicht möglich.',
+        'Creates a new event. Without calendarId the default calendar is used. Read-only calendars are rejected. For all-day events, alarms are floored to whole days and placed at 09:00, matching Calendar.app. Never modifies or deletes existing events — neither is currently possible.',
       inputSchema: createEventInput,
       annotations: {
-        title: 'Termin anlegen',
+        title: 'Create event',
         readOnlyHint: false,
         // Legt ausschliesslich neu an; ueberschreibt und loescht nichts.
         destructiveHint: false,

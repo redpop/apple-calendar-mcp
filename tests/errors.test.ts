@@ -4,7 +4,7 @@ import { HelperError, describeError } from '../src/errors.js'
 describe('describeError', () => {
   it('erklärt fehlende Berechtigung mit konkretem Handlungsschritt', () => {
     const message = describeError('PERMISSION_DENIED')
-    expect(message).toContain('Datenschutz & Sicherheit')
+    expect(message).toContain('Privacy & Security')
   })
 
   it('verweist bei unbekanntem Kalender auf list_calendars', () => {
@@ -22,7 +22,7 @@ describe('describeError', () => {
 
   it('fällt bei unbekanntem Code auf eine allgemeine Meldung zurück', () => {
     const message = describeError('VOELLIG_UNBEKANNT')
-    expect(message).toContain('unerwarteter Fehler')
+    expect(message).toContain('unexpected error')
   })
 
   it('gibt niemals einen Stacktrace zurück', () => {

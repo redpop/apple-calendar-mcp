@@ -8,10 +8,10 @@ export function registerListCalendars(server: McpServer, runner: HelperRunner): 
     'list_calendars',
     {
       description:
-        'Listet alle im macOS-Kalender konfigurierten Kalender auf, inklusive iCloud. Liefert je Kalender id, title, type, source, color und allowsModifications. Liest keine Termine — dafür ist list_events zuständig.',
+        'Lists every calendar configured in macOS Calendar, including iCloud ones. Returns id, title, type, source, color and allowsModifications for each. Does not read events — list_events does that.',
       inputSchema: listCalendarsInput,
       annotations: {
-        title: 'Kalender auflisten',
+        title: 'List calendars',
         readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: false,
