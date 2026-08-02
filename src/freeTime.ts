@@ -24,6 +24,15 @@ export interface FreeTimeOptions {
   activityDomain: ActivityDomain
   workingHours?: WorkingHours | undefined
   ignoreAllDay: boolean
+  /**
+   * Freizuhaltende Zeit vor und nach jedem belegten Termin, in Minuten.
+   *
+   * Eine Luecke, die unmittelbar zwischen zwei Terminen klemmt, ist
+   * rechnerisch frei und praktisch unbrauchbar — kein Weg zum naechsten Raum,
+   * keine Pause, kein Ueberziehen. Standard 0, damit das Verhalten ohne
+   * diesen Wert unveraendert bleibt.
+   */
+  bufferMinutes?: number | undefined
 }
 
 interface Span {
@@ -158,6 +167,9 @@ export function validateFreeTimeInput(options: FreeTimeOptions): string | undefi
   if (options.durationMinutes <= 0) {
     return 'durationMinutes must be greater than zero.'
   }
+  if (options.bufferMinutes !== undefined && options.bufferMinutes < 0) {
+    return 'bufferMinutes must not be negative.'
+  }
   if (options.workingHours !== undefined) {
     try {
       const from = parseClock(options.workingHours.start, 'workingHours.start')
@@ -185,12 +197,22 @@ export function computeFreeSlots(events: BusyEvent[], options: FreeTimeOptions):
   const rangeStart = new Date(options.start)
   const rangeEnd = new Date(options.end)
 
+  // Der Puffer weitet jeden belegten Zeitraum nach beiden Seiten auf, und
+  // zwar VOR dem Verschmelzen: zwei Termine, deren Puffer sich beruehren,
+  // werden dadurch zu einem Block, statt dass zweimal abgezogen wird.
+  //
+  // Erst filtern, dann aufweiten — sonst wuerde die Gueltigkeitspruefung
+  // `end > start` auch fuer ein kaputtes Event zutreffen, sobald ein Puffer
+  // im Spiel ist.
+  const bufferMs = (options.bufferMinutes ?? 0) * 60_000
+
   const busy = mergeSpans(
     events
       .filter((event) => event.status !== 'canceled')
       .filter((event) => !(options.ignoreAllDay && event.allDay))
       .map((event) => ({ start: Date.parse(event.start), end: Date.parse(event.end) }))
-      .filter((span) => Number.isFinite(span.start) && Number.isFinite(span.end) && span.end > span.start),
+      .filter((span) => Number.isFinite(span.start) && Number.isFinite(span.end) && span.end > span.start)
+      .map((span) => ({ start: span.start - bufferMs, end: span.end + bufferMs })),
   )
 
   const minimum = options.durationMinutes * 60_000

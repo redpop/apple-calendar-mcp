@@ -73,6 +73,14 @@ export const findFreeTimeInput = z.object({
     .boolean()
     .default(true)
     .describe('All-day events do not count as busy'),
+  bufferMinutes: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(0)
+    .describe(
+      'Free time to keep before and after each busy event, in minutes. Use this when a slot pressed directly between two meetings would not actually be usable.',
+    ),
 })
 
 // MARK: Antworten der Swift-CLI

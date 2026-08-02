@@ -68,6 +68,7 @@ does not call a separate helper command. Input:
 | `activityDomain` | `work` \| `personal` \| `unrestricted` | no | Default `work`; see table below |
 | `workingHours` | `{ start: "HH:MM", end: "HH:MM" }` | no | Overrides only the *hours* of `activityDomain`, not which days are eligible |
 | `ignoreAllDay` | boolean | no | Default `true`; all-day events don't count as busy |
+| `bufferMinutes` | non-negative integer | no | Default `0`; free time to keep either side of each busy event |
 
 `activityDomain` controls both which days and which hours of the day are
 considered:
@@ -81,6 +82,26 @@ considered:
 `workingHours` only ever replaces the hour range; it cannot be used to add
 or remove days from a domain (e.g. you cannot use it to make `work` include
 Saturdays — use `personal` or `unrestricted` for that).
+
+### `bufferMinutes`
+
+A gap wedged directly between two meetings is free on paper and unusable in
+practice — no walk to the next room, no break, no overrunning the previous
+call. `bufferMinutes` keeps that much time free on either side of every busy
+event.
+
+Two aspects are worth knowing, because both are easy to get wrong:
+
+- **Working hours are not extended.** With `work` and a 30-minute buffer,
+  09:00 stays 09:00 when nothing precedes it. The buffer only ever removes
+  time, never adds it.
+- **Events just outside the window still count.** A meeting ending at 08:45
+  trims a window starting at 09:00 when the buffer is 30 minutes. To make
+  that possible the server widens its own `list_events` query by the buffer
+  on both sides; the returned slots stay within the window you asked for.
+
+Buffers of adjacent events that overlap merge into one block rather than
+being subtracted twice.
 
 This tool returns free gaps, not the busy events themselves (`list_events`
 is for that), and it creates nothing.

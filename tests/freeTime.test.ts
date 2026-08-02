@@ -212,3 +212,90 @@ describe('computeFreeSlots — ungültige Eingaben', () => {
     ).toThrow()
   })
 })
+
+describe('computeFreeSlots — bufferMinutes', () => {
+  it('laesst das Ergebnis unveraendert, wenn der Puffer null ist', () => {
+    const events = [busy('2026-08-03T12:00:00+02:00', '2026-08-03T13:00:00+02:00')]
+    const ohne = computeFreeSlots(events, options())
+    const mitNull = computeFreeSlots(events, options({ bufferMinutes: 0 }))
+    expect(mitNull).toEqual(ohne)
+  })
+
+  it('verkleinert die Luecken um den Puffer auf beiden Seiten', () => {
+    const slots = computeFreeSlots(
+      [busy('2026-08-03T12:00:00+02:00', '2026-08-03T13:00:00+02:00')],
+      options({ bufferMinutes: 15 }),
+    )
+    expect(slots).toHaveLength(2)
+    expect(slots[0]?.end).toBe('2026-08-03T11:45:00+02:00')
+    expect(slots[1]?.start).toBe('2026-08-03T13:15:00+02:00')
+  })
+
+  it('laesst eine Luecke ganz verschwinden, wenn der Puffer sie aufzehrt', () => {
+    // Zwei Termine mit 60 Minuten Abstand; 40 Minuten Puffer auf jeder Seite
+    // lassen 0 Minuten uebrig, gefordert ist eine Stunde.
+    const slots = computeFreeSlots(
+      [
+        busy('2026-08-03T10:00:00+02:00', '2026-08-03T11:00:00+02:00'),
+        busy('2026-08-03T12:00:00+02:00', '2026-08-03T13:00:00+02:00'),
+      ],
+      options({ bufferMinutes: 40, durationMinutes: 30 }),
+    )
+    const mittags = slots.find((slot) => slot.start.includes('T11:'))
+    expect(mittags).toBeUndefined()
+  })
+
+  it('verschmilzt Termine, deren Puffer sich ueberlappen, statt doppelt abzuziehen', () => {
+    // 30 Minuten Abstand, 20 Minuten Puffer: die aufgeweiteten Spans
+    // ueberlappen sich und muessen zu einem Block werden. Ein doppelter Abzug
+    // wuerde den Nachmittag faelschlich spaeter beginnen lassen.
+    const slots = computeFreeSlots(
+      [
+        busy('2026-08-03T10:00:00+02:00', '2026-08-03T11:00:00+02:00'),
+        busy('2026-08-03T11:30:00+02:00', '2026-08-03T12:30:00+02:00'),
+      ],
+      options({ bufferMinutes: 20, durationMinutes: 30 }),
+    )
+    expect(slots).toHaveLength(2)
+    expect(slots[0]?.end).toBe('2026-08-03T09:40:00+02:00')
+    expect(slots[1]?.start).toBe('2026-08-03T12:50:00+02:00')
+  })
+
+  it('dehnt das Arbeitszeitfenster nicht ueber seine Grenzen hinaus', () => {
+    // Nichts liegt vor 09:00, also darf der Puffer den Fensteranfang nicht
+    // nach vorn schieben — 09:00 bleibt 09:00.
+    const slots = computeFreeSlots([], options({ bufferMinutes: 30 }))
+    expect(slots).toHaveLength(1)
+    expect(slots[0]?.start).toBe('2026-08-03T09:00:00+02:00')
+    expect(slots[0]?.end).toBe('2026-08-03T18:00:00+02:00')
+  })
+
+  it('beschneidet den Fensteranfang, wenn ein Termin davor hineinragt', () => {
+    // Ein Termin, der um 08:45 endet, liegt ausserhalb des Arbeitszeitfensters
+    // — sein Puffer reicht aber hinein. Ohne diese Beruecksichtigung wuerde
+    // ein Slot vorgeschlagen, der unmittelbar an ein Meeting grenzt.
+    const slots = computeFreeSlots(
+      [busy('2026-08-03T08:00:00+02:00', '2026-08-03T08:45:00+02:00')],
+      options({ bufferMinutes: 30 }),
+    )
+    expect(slots).toHaveLength(1)
+    expect(slots[0]?.start).toBe('2026-08-03T09:15:00+02:00')
+  })
+
+  it('erzeugt keinen Puffer um ganztaegige Termine, die ignoriert werden', () => {
+    const slots = computeFreeSlots(
+      [busy('2026-08-03T00:00:00+02:00', '2026-08-03T23:59:59+02:00', { allDay: true })],
+      options({ bufferMinutes: 60, ignoreAllDay: true }),
+    )
+    expect(slots).toHaveLength(1)
+    expect(slots[0]?.start).toBe('2026-08-03T09:00:00+02:00')
+  })
+
+  it('erzeugt keinen Puffer um abgesagte Termine', () => {
+    const slots = computeFreeSlots(
+      [busy('2026-08-03T12:00:00+02:00', '2026-08-03T13:00:00+02:00', { status: 'canceled' })],
+      options({ bufferMinutes: 60 }),
+    )
+    expect(slots).toHaveLength(1)
+  })
+})

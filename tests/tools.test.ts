@@ -194,6 +194,45 @@ describe('find_free_time', () => {
     expect(slots[0]?.start).toBe('2026-08-03T09:00:00+02:00')
   })
 
+  it('fragt ohne Puffer genau das Suchfenster ab', async () => {
+    const { server, calls } = buildServer(() => ({ events: [], totalMatched: 0, truncated: false }))
+    const tool = registeredTools(server)['find_free_time']
+
+    await tool?.callback({
+      start: '2026-08-03T00:00:00+02:00',
+      end: '2026-08-03T23:59:59+02:00',
+      durationMinutes: 60,
+      activityDomain: 'work',
+      ignoreAllDay: true,
+    })
+
+    // Ohne bufferMinutes darf kein NaN-Datum entstehen: zod setzt den
+    // Standardwert zwar beim Parsen, aber der Callback muss auch ohne ihn
+    // etwas Gueltiges an den Helper schicken.
+    expect(calls[0]?.payload['start']).toBe('2026-08-03T00:00:00+02:00')
+    expect(calls[0]?.payload['end']).toBe('2026-08-03T23:59:59+02:00')
+  })
+
+  it('weitet das Abfragefenster um den Puffer auf', async () => {
+    const { server, calls } = buildServer(() => ({ events: [], totalMatched: 0, truncated: false }))
+    const tool = registeredTools(server)['find_free_time']
+
+    await tool?.callback({
+      start: '2026-08-03T09:00:00+02:00',
+      end: '2026-08-03T18:00:00+02:00',
+      durationMinutes: 60,
+      activityDomain: 'work',
+      ignoreAllDay: true,
+      bufferMinutes: 30,
+    })
+
+    // Ein Termin, der um 08:45 endet, liegt ausserhalb des Suchfensters, sein
+    // Puffer reicht aber hinein. Ohne erweiterte Abfrage waere er gar nicht
+    // in der Antwort und koennte den Fensteranfang nicht beschneiden.
+    expect(calls[0]?.payload['start']).toBe('2026-08-03T08:30:00+02:00')
+    expect(calls[0]?.payload['end']).toBe('2026-08-03T18:30:00+02:00')
+  })
+
   it('meldet eine ungültige workingHours-Reihenfolge als INVALID_INPUT statt als generischen Fehler, ohne den Helper aufzurufen', async () => {
     const { server, calls } = buildServer(() => ({
       events: [],
