@@ -1,6 +1,7 @@
 {
   "name": "@redpop/apple-calendar-mcp",
   "version": "0.1.0",
+  "mcpName": "io.github.redpop/apple-calendar-mcp",
   "description": "MCP server for Apple Calendar on macOS: read events, create them, and find free time — via EventKit, with a permission grant that survives updates",
   "license": "MIT",
   "type": "module",

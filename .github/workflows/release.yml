@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Zwei schnell aufeinanderfolgende Tags duerfen sich nicht beim `npm publish`
+# in die Quere kommen. Kein cancel-in-progress: ein halb durchgelaufener
+# Release (npm ver oeffentlicht, GitHub-Release fehlt) waere schlimmer als ein
+# wartender Lauf.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # GitHub-Release anlegen
+  id-token: write # npm-Provenance (Sigstore)
+
+jobs:
+  release:
+    # Fest auf macos-14 gepinnt, nicht macos-latest: swift/build.sh baut gegen
+    # ein Deployment-Target von macOS 14. Rotiert GitHub die Runner-Images,
+    # wanderte das Ziel sonst unbemerkt mit.
+    runs-on: macos-14
+
+    env:
+      # Die Team-ID ist nicht geheim — sie steht in jeder Signatur, die
+      # ausgeliefert wird.
+      APPLE_TEAM_ID: 4KTGF63CD2
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      # Ein Tag v1.2.3 muss zu "version": "1.2.3" passen. Sonst traegt das
+      # GitHub-Release eine andere Nummer als das npm-Paket, und niemand
+      # kann die beiden spaeter zuordnen.
+      - name: Tag gegen package.json pruefen
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME erwartet Version $TAG_VERSION, package.json sagt $PKG_VERSION" >&2
+            exit 1
+          fi
+          echo "Version $PKG_VERSION"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+        env:
+          TZ: Europe/Berlin
+
+      - name: TypeScript build
+        run: npm run build
+
+      - name: Zertifikat in temporaeren Keychain importieren
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # Ohne -lut sperrt der Keychain nach fuenf Minuten wieder zu und
+          # codesign scheitert mitten im Lauf.
+          security set-keychain-settings -lut 21600 build.keychain
+
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          rm -f certificate.p12
+
+          # Erlaubt codesign den Zugriff auf den Schluessel, ohne dass ein
+          # Dialog aufgeht, den auf einem Runner niemand wegklicken kann.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
+
+      - name: Helper bauen und signieren
+        # build.sh findet das eben importierte Developer-ID-Zertifikat selbst.
+        run: npm run build:helper
+
+      - name: Notarisieren
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ditto -c -k bin/calendar-helper calendar-helper.zip
+
+          # Ein nacktes Binary laesst sich notarisieren, aber nicht stapeln —
+          # dafuer braeuchte es ein .pkg oder .app. Ohne Stapling prueft
+          # Gatekeeper online. Fuer den npm-Weg spielt beides keine Rolle, weil
+          # npm keine Quarantaene-Markierung setzt; relevant ist es nur fuer
+          # das ZIP am GitHub-Release, das jemand im Browser laedt.
+          xcrun notarytool submit calendar-helper.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+      # Der wichtigste Schritt. swift/build.sh faellt still auf eine
+      # Ad-hoc-Signatur zurueck, wenn kein Zertifikat gefunden wird — etwa
+      # weil der Keychain-Import scheiterte. Ein so signiertes Binary bindet
+      # die Kalenderberechtigung an seinen Code-Hash statt an die Developer
+      # ID, und macOS verweigert nach dem naechsten Update den Zugriff:
+      # ohne Dialog, ohne Fehlermeldung. Lieber hier abbrechen.
+      - name: Artefakt verifizieren
+        run: |
+          set -euo pipefail
+
+          echo "=== Architekturen ==="
+          lipo -info bin/calendar-helper | tee /tmp/lipo.out
+          grep -qE "are: (x86_64 arm64|arm64 x86_64)" /tmp/lipo.out
+
+          echo "=== Signatur ==="
+          codesign -dv --verbose=2 bin/calendar-helper 2>&1 | tee /tmp/codesign.out
+          grep -q "Authority=Developer ID Application:" /tmp/codesign.out
+          grep -q "flags=0x10000(runtime)" /tmp/codesign.out
+          codesign --verify --strict --verbose=2 bin/calendar-helper
+
+          echo "=== Notarisierung ==="
+          # Prueft gegen Apples Notary-Service. Bei einem nackten Binary ohne
+          # Stapling ist das eine Online-Abfrage.
+          spctl -a -vv -t install bin/calendar-helper 2>&1 || true
+
+      # Ein Paket ohne Binary installiert sich anstandslos und scheitert erst
+      # beim Nutzer. Und tsc laesst verwaiste Kompilate in dist/ liegen, die
+      # sonst unbemerkt mitreisen.
+      - name: Paketinhalt verifizieren
+        run: |
+          set -euo pipefail
+          PACK_JSON="$(npm pack --json --dry-run)"
+          PACK_JSON="$PACK_JSON" node -e '
+            const [pack] = JSON.parse(process.env.PACK_JSON);
+            const files = new Set(pack.files.map((file) => file.path));
+            const required = ["bin/calendar-helper", "dist/index.js", "dist/helperInstall.js"];
+            const missing = required.filter((file) => !files.has(file));
+            if (missing.length > 0) {
+              console.error("Fehlende Paketdateien: " + missing.join(", "));
+              process.exit(1);
+            }
+            console.log("Paket: " + pack.name + "@" + pack.version + ", " + pack.entryCount + " Dateien");
+          '
+
+      - name: Auf npm veroeffentlichen
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: GitHub-Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            calendar-helper.zip
+
+      # Nach npm, nicht davor: Die Registry prueft, ob das referenzierte Paket
+      # existiert und ueber sein mcpName-Feld zum Namensraum gehoert.
+      # Bewusst am Ende — schlaegt der Eintrag fehl, sind npm-Paket und
+      # GitHub-Release trotzdem draussen und der Registry-Eintrag laesst sich
+      # nachholen.
+      - name: In der MCP Registry eintragen
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+
+          # server.json traegt die Version doppelt: einmal fuer den Server,
+          # einmal fuer das Paket. Beide aus package.json setzen, damit sie
+          # nicht auseinanderlaufen.
+          VERSION="$VERSION" node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("server.json", "utf8"));
+            manifest.version = process.env.VERSION;
+            for (const pkg of manifest.packages) pkg.version = process.env.VERSION;
+            fs.writeFileSync("server.json", JSON.stringify(manifest, null, 2) + "\n");
+          '
+
+          # Architektur zur Laufzeit bestimmen, statt sie an den gepinnten
+          # Runner zu koppeln: ein spaeterer Wechsel soll nicht an einem
+          # 404 scheitern, das wie ein Netzwerkproblem aussieht.
+          case "$(uname -m)" in
+            arm64) PUBLISHER_ARCH="darwin_arm64" ;;
+            x86_64) PUBLISHER_ARCH="darwin_amd64" ;;
+            *) echo "Unbekannte Architektur: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_${PUBLISHER_ARCH}.tar.gz" \
+            | tar xz mcp-publisher
+
+          # GitHub-OIDC statt eines langlebigen Tokens: der Namensraum
+          # io.github.redpop wird ueber die Identitaet dieses Workflow-Laufs
+          # nachgewiesen.
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      # Auch nach einem Fehlschlag: das Zertifikat darf nicht im Runner-Image
+      # zurueckbleiben.
+      - name: Keychain entfernen
+        if: always()
+        run: |
+          security default-keychain -s login.keychain 2>/dev/null || true
+          security delete-keychain build.keychain 2>/dev/null || true
+          rm -f certificate.p12

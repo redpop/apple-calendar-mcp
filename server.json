@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.redpop/apple-calendar-mcp",
+  "title": "Apple Calendar",
+  "description": "Read and create events in Apple Calendar on macOS, and find free time across calendars. Uses EventKit directly; works in GUI clients that hold no calendar permission themselves.",
+  "repository": {
+    "url": "https://github.com/redpop/apple-calendar-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@redpop/apple-calendar-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
