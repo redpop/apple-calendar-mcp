@@ -33,3 +33,19 @@ jobs:
       # calendar and no TCC permission available there.
       - name: Build Swift helper
         run: npm run build:helper
+
+      # The binary ships inside the npm package, so it has to carry both
+      # architectures — an arm64-only build breaks on Intel Macs, and only at
+      # the user's end. The release workflow checks this too, but by then a
+      # tag has been pushed and secrets are in play. Catching it here means a
+      # broken lipo step fails a pull request instead of half a release.
+      #
+      # Signature identity is deliberately not checked: CI has no Developer ID
+      # certificate, so build.sh signs ad-hoc here. That is the release
+      # workflow's job, where a certificate is expected to exist.
+      - name: Verify the helper is universal
+        run: |
+          set -euo pipefail
+          lipo -info bin/calendar-helper | tee /tmp/lipo.out
+          grep -qE "are: (x86_64 arm64|arm64 x86_64)" /tmp/lipo.out
+          codesign --verify --strict --verbose=2 bin/calendar-helper
