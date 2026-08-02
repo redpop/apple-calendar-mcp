@@ -1,0 +1,33 @@
+name: MCP Registry
+
+# Von Hand auszuloesen. Der Release-Workflow traegt den Server am Ende eines
+# Laufs selbst ein; dieser Workflow ist fuer den Fall, dass genau dieser
+# Schritt scheitert — etwa weil die Registry gerade nicht erreichbar ist oder
+# server.json eine Regel verletzt hat.
+#
+# Er baut nichts und veroeffentlicht nichts auf npm: Der Registry-Eintrag
+# verweist nur auf ein bereits veroeffentlichtes Paket. Deshalb genuegt hier
+# ein Linux-Runner, und ein erneuter Lauf ist folgenlos.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC-Nachweis fuer den Namensraum io.github.redpop
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      # Die Version stammt aus package.json auf dem Stand, auf dem dieser
+      # Workflow laeuft. Fuer eine aeltere Version den passenden Tag als
+      # Referenz waehlen.
+      - name: In der MCP Registry eintragen
+        run: bash scripts/publish-registry.sh
