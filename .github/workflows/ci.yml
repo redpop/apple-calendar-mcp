@@ -34,11 +34,29 @@ jobs:
       - name: Build Swift helper
         run: npm run build:helper
 
+      # A package that installs cleanly but contains no binary fails only at
+      # the user's end. The release workflow asserts this too, but by then a
+      # tag has been pushed and signing secrets are in play — better to fail a
+      # pull request than half a release.
+      - name: Verify the package would contain what it must
+        run: |
+          set -euo pipefail
+          PACK_JSON="$(npm pack --json --dry-run)"
+          PACK_JSON="$PACK_JSON" node -e '
+            const [pack] = JSON.parse(process.env.PACK_JSON);
+            const files = new Set(pack.files.map((file) => file.path));
+            const required = ["bin/calendar-helper", "dist/index.js", "dist/helperInstall.js"];
+            const missing = required.filter((file) => !files.has(file));
+            if (missing.length > 0) {
+              console.error("Missing package files: " + missing.join(", "));
+              process.exit(1);
+            }
+            console.log(pack.name + "@" + pack.version + ", " + pack.entryCount + " files");
+          '
+
       # The binary ships inside the npm package, so it has to carry both
       # architectures — an arm64-only build breaks on Intel Macs, and only at
-      # the user's end. The release workflow checks this too, but by then a
-      # tag has been pushed and secrets are in play. Catching it here means a
-      # broken lipo step fails a pull request instead of half a release.
+      # the user's end.
       #
       # Signature identity is deliberately not checked: CI has no Developer ID
       # certificate, so build.sh signs ad-hoc here. That is the release

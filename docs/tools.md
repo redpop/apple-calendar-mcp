@@ -77,7 +77,7 @@ left out keeps its current value — a title change does not wipe the notes.
 | `title` | string | no | Must not be empty if given |
 | `start` / `end` | ISO 8601 datetime with offset | no | Same all-day normalisation as `create_event` |
 | `allDay` | boolean | no | Converts between timed and all-day |
-| `location` / `notes` / `url` | string | no | Replace the previous value |
+| `location` / `notes` / `url` | string | no | Replace the previous value; an empty `url` removes it |
 | `alarmMinutesBefore` | integer array | no | **Replaces** all alarms; pass `[]` to remove them |
 
 Read-only calendars are rejected with `CALENDAR_READONLY`. An unknown

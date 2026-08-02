@@ -218,6 +218,11 @@ func eventStatusLabel(_ status: EKEventStatus) -> String {
 }
 
 /// Bildet das Ende eines ganztaegigen Events auf den letzten *enthaltenen* Tag ab.
+///
+/// Nur fuer den LESEPFAD: EventKit liefert dort 23:59:59 des letzten Tages,
+/// und der Mitternachts-Zweig faengt Werte ab, die aus anderen Quellen stammen.
+/// Zum Schreiben ist `canonicalAllDayEnd` zustaendig — siehe dort, warum das
+/// nicht dieselbe Funktion sein kann.
 func inclusiveEndDay(_ end: Date) -> Date {
     let calendar = Calendar.current
     let parts = calendar.dateComponents([.hour, .minute, .second], from: end)
@@ -225,6 +230,29 @@ func inclusiveEndDay(_ end: Date) -> Date {
         return calendar.date(byAdding: .day, value: -1, to: end) ?? end
     }
     return end
+}
+
+/// Kanonisches Enddatum fuer einen ganztaegigen Termin: 23:59:59 des letzten
+/// enthaltenen Tages.
+///
+/// Warum nicht einfach `inclusiveEndDay`: Die liefert bei der halboffenen
+/// Schreibweise (Mitternacht des Folgetages) zwar den richtigen Tag, aber mit
+/// Uhrzeit 00:00 — und **EventKit deutet Mitternacht selbst wieder als Ende
+/// des Vortages**. Der Termin verlor dadurch stillschweigend seinen letzten
+/// Tag: `end: 2026-11-12T00:00` wurde als 10.11. gespeichert statt als 11.11.
+///
+/// Gemessen: `inclusiveEndDay` allein ergab `endDay=2026-11-10`, waehrend die
+/// inklusive Schreibweise `2026-11-11` lieferte — zwei verschiedene Ergebnisse
+/// fuer denselben gemeinten Zeitraum, obwohl docs/tools.md beide als
+/// gleichwertig zusichert.
+///
+/// Deshalb wird hier zusaetzlich auf das Tagesende gesetzt. Beide Eingabeformen
+/// landen damit auf demselben gespeicherten Wert, und der Lesepfad gibt ihn
+/// unveraendert zurueck.
+func canonicalAllDayEnd(_ end: Date) -> Date {
+    let calendar = Calendar.current
+    let lastDay = inclusiveEndDay(end)
+    return calendar.date(bySettingHour: 23, minute: 59, second: 59, of: lastDay) ?? lastDay
 }
 
 func serializeEvent(_ event: EKEvent) -> [String: Any] {
@@ -366,7 +394,7 @@ func performCreateEvent(payload: [String: Any], store: EKEventStore) throws -> [
     // Tag abbilden; inclusiveEndDay wird bewusst wiederverwendet statt einer
     // zweiten Implementierung.
     if allDay {
-        let normalizedEnd = inclusiveEndDay(end)
+        let normalizedEnd = canonicalAllDayEnd(end)
         if normalizedEnd >= start {
             end = normalizedEnd
         }
@@ -530,7 +558,7 @@ func performUpdateEvent(payload: [String: Any], store: EKEventStore) throws -> [
         // Schreibweisen fuer das Ende eines ganztaegigen Termins muessen auf
         // denselben Tag abbilden.
         if allDay {
-            let normalized = inclusiveEndDay(end)
+            let normalized = canonicalAllDayEnd(end)
             if normalized >= (event.startDate ?? normalized) { end = normalized }
         }
         event.endDate = end
@@ -542,7 +570,18 @@ func performUpdateEvent(payload: [String: Any], store: EKEventStore) throws -> [
 
     if let location = payload["location"] as? String { event.location = location }
     if let notes = payload["notes"] as? String { event.notes = notes }
-    if let urlText = payload["url"] as? String { event.url = URL(string: urlText) }
+    if let urlText = payload["url"] as? String {
+        // Gemessen auf macOS 26: `URL(string:)` liefert nur fuer den LEEREN
+        // String nil — Leerzeichen und Steuerzeichen werden akzeptiert und
+        // prozentkodiert. Frueher stand hier `event.url = URL(string: urlText)`,
+        // was den leeren String stillschweigend zum Loeschen machte.
+        //
+        // Das Loeschen bleibt moeglich, denn sonst liesse sich eine einmal
+        // gesetzte URL nie wieder entfernen. Es ist jetzt nur nicht mehr die
+        // stille Nebenwirkung eines Parse-Fehlers, sondern die dokumentierte
+        // Bedeutung eines leeren Wertes.
+        event.url = urlText.isEmpty ? nil : URL(string: urlText)
+    }
 
     // Alarme werden als Ganzes ersetzt, nicht ergaenzt: eine Liste zu
     // uebergeben und dann eine laengere zurueckzubekommen waere ueberraschend.
@@ -645,9 +684,10 @@ struct ServeRequest {
 }
 
 func parseServeRequest(_ line: String) throws -> ServeRequest {
-    guard let data = line.data(using: .utf8) else {
-        throw HelperError(code: "INVALID_INPUT", message: "Line could not be decoded as UTF-8.")
-    }
+    // Kein UTF-8-Guard: Der Parameter ist bereits ein String, und
+    // String.data(using: .utf8) kann dafuer nicht nil liefern. Die Pruefung
+    // gehoert an die Stelle, wo aus Bytes ein String wird — readStdinLines.
+    let data = Data(line.utf8)
     guard let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any] else {
         throw HelperError(code: "INVALID_INPUT", message: "Line did not contain a valid JSON object.")
@@ -718,17 +758,47 @@ func readStdinLines(handle: (String) -> Void) {
         let bytesRead = chunk.withUnsafeMutableBytes { pointer -> Int in
             read(STDIN_FILENO, pointer.baseAddress, pointer.count)
         }
-        if bytesRead <= 0 { break }
+
+        if bytesRead == 0 { break } // EOF: der Elternprozess ist weg.
+
+        if bytesRead < 0 {
+            // EINTR ist kein Fehler, sondern ein unterbrochener Systemaufruf —
+            // weiterlesen. Alles andere ist echt: laut scheitern statt wie ein
+            // regulaeres EOF auszusehen, sonst wartet der Node-Layer auf eine
+            // Antwort, die nie kommt, und meldet einen Timeout ohne Ursache.
+            if errno == EINTR { continue }
+            serveLog("calendar-helper: read on stdin failed: \(String(cString: strerror(errno)))")
+            exit(1)
+        }
+
         buffer.append(contentsOf: chunk[0..<bytesRead])
-        while let newlineIndex = buffer.firstIndex(of: 0x0A) {
-            let lineData = buffer[..<newlineIndex]
-            buffer.removeSubrange(buffer.startIndex...newlineIndex)
-            if let line = String(data: lineData, encoding: .utf8) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    handle(trimmed)
-                }
+
+        // Cursor statt removeSubrange: von vorn zu entfernen verschiebt bei
+        // jeder Zeile den Rest des Puffers.
+        var searchFrom = buffer.startIndex
+        var consumedUpTo = buffer.startIndex
+        while let newlineIndex = buffer[searchFrom...].firstIndex(of: 0x0A) {
+            let lineData = buffer[consumedUpTo..<newlineIndex]
+            consumedUpTo = buffer.index(after: newlineIndex)
+            searchFrom = consumedUpTo
+
+            guard let line = String(data: lineData, encoding: .utf8) else {
+                // Eine Zeile stillschweigend zu verwerfen laesst den Aufrufer
+                // in einen Timeout laufen, ohne je zu erfahren, warum.
+                serveLog("calendar-helper: dropped a line that was not valid UTF-8")
+                FileHandle.standardOutput.write(encodeServeResponse([
+                    "ok": false,
+                    "error": ["code": "INVALID_INPUT", "message": "Request line was not valid UTF-8."],
+                ]))
+                continue
             }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                handle(trimmed)
+            }
+        }
+        if consumedUpTo > buffer.startIndex {
+            buffer.removeSubrange(buffer.startIndex..<consumedUpTo)
         }
     }
 }
@@ -819,7 +889,14 @@ func reexecDisclaimed() {
     // Ohne das Flag wuerde posix_spawn ein Kind erzeugen und dieser Prozess
     // liefe daneben weiter — zwei Prozesse, von denen einer nichts tut.
     guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC)) == 0 else { return }
-    _ = setDisclaim(&attributes, 1)
+    // Rueckgabewert nicht verwerfen: Schlaegt der Aufruf fehl, laeuft der
+    // Prozess ohne Disclaim weiter und wird auf GUI-Clients stumm abgewiesen —
+    // genau der Zustand, den dieser Code verhindern soll. Das degradierte
+    // Verhalten ist gewollt, seine Unsichtbarkeit nicht.
+    let disclaimResult = setDisclaim(&attributes, 1)
+    if disclaimResult != 0 {
+        log("setdisclaim schlug fehl (\(disclaimResult)) — Kalenderzugriff wird vermutlich verweigert")
+    }
 
     var environment = ProcessInfo.processInfo.environment
     environment[marker] = "1"

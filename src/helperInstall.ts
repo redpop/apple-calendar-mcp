@@ -51,7 +51,10 @@ export function ensureInstalledHelper(
     // haengt. Ein rename() ersetzt nur den Verzeichniseintrag; ein noch
     // laufender Prozess behaelt seine alte Inode und laeuft ungestoert
     // weiter.
-    const staging = `${target}.tmp`
+    // Prozess-eindeutig: Starten zwei Clients gleichzeitig zum ersten Mal,
+    // schreiben sonst beide in dieselbe Datei, waehrend der andere daraus
+    // umbenennt. rename() selbst ist atomar, die Quelle war es nicht.
+    const staging = `${target}.tmp.${String(process.pid)}`
     copyFileSync(packagedPath, staging)
     chmodSync(staging, 0o755)
     renameSync(staging, target)
@@ -63,7 +66,7 @@ export function ensureInstalledHelper(
     // ist (ENOTDIR). `force: true` faengt nur ENOENT ab, nicht das. Ein
     // Fehler beim Aufraeumen darf den Rueckfall nicht verhindern.
     try {
-      rmSync(`${target}.tmp`, { force: true })
+      rmSync(`${target}.tmp.${String(process.pid)}`, { force: true })
     } catch {
       /* Rest eines fehlgeschlagenen Versuchs; nicht kritisch. */
     }

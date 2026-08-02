@@ -64,6 +64,17 @@ export function createStdioRunner(
   let nextId = 1
   /** Hat der AKTUELLE Prozess schon einmal geantwortet? Steuert die Frist. */
   let isWarm = false
+  /**
+   * Timeouts in Folge auf einem bereits warmen Helper.
+   *
+   * Ein warmer Helper antwortet in etwa einer Millisekunde. Laeuft eine
+   * Anfrage trotzdem in die Frist, steckt er fest — und ohne Neustart liefe
+   * jede weitere Anfrage genauso ins Leere, bis jemand den Server neu startet.
+   * Beim ERSTEN Aufruf gilt das nicht: dort wartet der Helper womoeglich noch
+   * auf einen Systemdialog, den ein Mensch bestaetigen muss.
+   */
+  let consecutiveTimeouts = 0
+  const MAX_CONSECUTIVE_TIMEOUTS = 2
   const pending: PendingRequest[] = []
 
   function rejectAllPending(error: HelperError): void {
@@ -85,6 +96,7 @@ export function createStdioRunner(
     child = undefined
     buffer = ''
     isWarm = false
+    consecutiveTimeouts = 0
     rejectAllPending(error)
     if (previous !== undefined) {
       previous.removeAllListeners()
@@ -102,7 +114,7 @@ export function createStdioRunner(
       // vertrauenswuerdig. Welche Anfrage sie beantworten sollte, ist
       // unbekannt — also alles Offene ablehnen und neu anfangen, statt eine
       // moeglicherweise falsche Zuordnung zu raten.
-      discardChild(new HelperError('HELPER_CRASHED', `Unlesbare Antwort vom Hilfsprogramm: ${line.slice(0, 200)}`))
+      discardChild(new HelperError('HELPER_CRASHED', `Unreadable response from the helper: ${line.slice(0, 200)}`))
       return
     }
 
@@ -115,6 +127,7 @@ export function createStdioRunner(
     if (entry === undefined) return
     clearTimeout(entry.timer)
     isWarm = true
+    consecutiveTimeouts = 0
 
     if (parsed.ok === true) {
       entry.resolve(parsed.result)
@@ -150,13 +163,18 @@ export function createStdioRunner(
       /* 'exit' entscheidet, was mit den offenen Anfragen geschieht. */
     })
 
-    started.on('error', (error: Error) => {
-      discardChild(new HelperError('HELPER_CRASHED', error.message))
+    started.on('error', (error: NodeJS.ErrnoException) => {
+      // ENOENT heisst: das Binary war beim Start nicht da. Das als
+      // "abgestuerzt" zu melden schickt den Leser in die falsche Richtung —
+      // es ist derselbe Fall wie die existsSync-Pruefung, nur einen Moment
+      // spaeter (etwa wenn ein Update die Datei gerade ersetzt).
+      const code = error.code === 'ENOENT' ? 'HELPER_MISSING' : 'HELPER_CRASHED'
+      discardChild(new HelperError(code, error.message))
     })
 
     started.on('exit', (code, signal) => {
       const reason = signal !== null ? `Signal ${signal}` : `Exit-Code ${String(code)}`
-      discardChild(new HelperError('HELPER_CRASHED', `Das Hilfsprogramm hat sich beendet (${reason}).`))
+      discardChild(new HelperError('HELPER_CRASHED', `The helper exited (${reason}).`))
     })
 
     return started
@@ -179,7 +197,15 @@ export function createStdioRunner(
           timer: setTimeout(() => {
             const index = pending.findIndex((candidate) => candidate.id === id)
             if (index !== -1) pending.splice(index, 1)
-            reject(new HelperError('HELPER_TIMEOUT', `Keine Antwort vom Hilfsprogramm innerhalb von ${String(timeoutMs)}ms.`))
+            if (isWarm) {
+              consecutiveTimeouts += 1
+              if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                discardChild(
+                  new HelperError('HELPER_TIMEOUT', 'The helper stopped responding and was restarted.'),
+                )
+              }
+            }
+            reject(new HelperError('HELPER_TIMEOUT', `No response from the helper within ${String(timeoutMs)}ms.`))
           }, timeoutMs),
         }
         pending.push(entry)
@@ -190,7 +216,7 @@ export function createStdioRunner(
     },
 
     stop() {
-      discardChild(new HelperError('HELPER_CRASHED', 'Das Hilfsprogramm wurde beendet.'))
+      discardChild(new HelperError('HELPER_CRASHED', 'The helper was shut down.'))
     },
   }
 }

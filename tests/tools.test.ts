@@ -177,7 +177,7 @@ describe('list_events — Abschneiden', () => {
       maxResults: 200,
     })
 
-    expect(result.content[0].text).not.toContain('hinweis')
+    expect(result.content[0].text).not.toContain('Showing')
   })
 })
 

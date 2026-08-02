@@ -8,10 +8,9 @@ import { registerTools } from './tools/index.js'
 // `instructions` landet direkt im System-Prompt des Clients. Der richtige Ort
 // fuer Hinweise, die fuer alle Tools gelten — in einzelnen Tool-Beschreibungen
 // waeren sie fehl am Platz.
-// Version aus package.json, nicht als Literal: Sie stand hier auf 0.1.0,
-// waehrend das Paket schon 0.1.1 war — ein Client, der die Serverversion
-// anzeigt oder protokolliert, haette also gelogen. Das faellt sonst niemandem
-// auf, weil nichts danach fehlschlaegt.
+// Version aus package.json, nicht als Literal: Ein Literal laeuft irgendwann
+// auseinander, ohne dass etwas fehlschlaegt — der Client bekaeme dann still
+// eine falsche Auskunft.
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string }
 
 const server = new McpServer(

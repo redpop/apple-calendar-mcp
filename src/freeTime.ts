@@ -63,13 +63,13 @@ export function toLocalISO(date: Date): string {
 function parseClock(value: string, field: string): number {
   const match = /^(\d{2}):(\d{2})$/.exec(value)
   if (match === null) {
-    throw new Error(`${field} muss im Format HH:MM vorliegen, war: ${value}`)
+    throw new Error(`${field} must be in HH:MM format, was: ${value}`)
   }
   const hours = Number(match[1])
   const minutes = Number(match[2])
   const total = hours * 60 + minutes
   if (minutes > 59 || total > 24 * 60) {
-    throw new Error(`${field} liegt außerhalb eines Tages: ${value}`)
+    throw new Error(`${field} lies outside a single day: ${value}`)
   }
   return total
 }

@@ -119,7 +119,7 @@ export const updateEventInput = z.object({
   allDay: z.boolean().optional().describe('Turn the event into an all-day event, or back'),
   location: z.string().optional().describe('New location'),
   notes: z.string().optional().describe('New notes, replacing the previous ones'),
-  url: z.string().optional().describe('New associated URL'),
+  url: z.string().optional().describe('New associated URL. An empty string removes it.'),
   alarmMinutesBefore: z
     .array(z.number().int().nonnegative())
     .optional()

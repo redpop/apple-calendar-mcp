@@ -33,7 +33,7 @@ export function registerListEvents(server: McpServer, runner: HelperRunner): voi
         // zu behandeln.
         return {
           ...parsed,
-          hinweis: `Es werden ${String(parsed.events.length)} von ${String(parsed.totalMatched)} Terminen gezeigt. Grenze den Zeitraum ein, nutze query oder erhöhe maxResults.`,
+          note: `Showing ${String(parsed.events.length)} of ${String(parsed.totalMatched)} events. Narrow the date range, use query, or raise maxResults.`,
         }
       }),
   )

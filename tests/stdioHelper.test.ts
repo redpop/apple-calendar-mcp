@@ -71,6 +71,8 @@ function handle(request) {
     case 'crash':
       process.exit(3)
       return
+    case 'hang':
+      return
     case 'slow':
       setTimeout(() => reply({ id, ok: true, result: 'spaet' }), 50)
       return
@@ -189,6 +191,38 @@ describe('createStdioRunner', () => {
       code: 'HELPER_MISSING',
     })
   })
+
+  it('meldet ein zwischenzeitlich geloeschtes Binary als HELPER_MISSING', async () => {
+    const helper = writeFakeHelper()
+    const runner = makeRunner(helper)
+
+    // Die existsSync-Pruefung und der spawn liegen auseinander. Verschwindet
+    // die Datei dazwischen — etwa waehrend ein Update sie ersetzt — kam frueher
+    // HELPER_CRASHED heraus, was den Leser in die falsche Richtung schickt.
+    rmSync(helper, { force: true })
+
+    await expect(runner.run('echo-pid', {})).rejects.toMatchObject({
+      code: 'HELPER_MISSING',
+    })
+  })
+
+  it('startet einen haengenden Helper nach wiederholten Timeouts neu', async () => {
+    const helper = writeFakeHelper()
+    const runner = makeRunner(helper)
+
+    // Erst warm werden — vorher gilt die lange Frist, weil dort noch ein
+    // Berechtigungsdialog offen sein koennte.
+    const before = (await runner.run('echo-pid', {})) as { pid: number }
+
+    // 'hang' antwortet nie. Zwei Timeouts in Folge muessen den Prozess
+    // verwerfen, sonst laeuft jede weitere Anfrage ebenfalls ins Leere und nur
+    // ein Neustart des Servers hilft.
+    await expect(runner.run('hang', {})).rejects.toMatchObject({ code: 'HELPER_TIMEOUT' })
+    await expect(runner.run('hang', {})).rejects.toMatchObject({ code: 'HELPER_TIMEOUT' })
+
+    const after = (await runner.run('echo-pid', {})) as { pid: number }
+    expect(after.pid).not.toBe(before.pid)
+  }, 15_000)
 
   it('beendet den Helper, wenn der Runner gestoppt wird', async () => {
     const helper = writeFakeHelper()
