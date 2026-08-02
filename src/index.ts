@@ -19,7 +19,19 @@ const server = new McpServer(
   },
 )
 
-registerTools(server, createHelperRunner())
+const helper = createHelperRunner()
+registerTools(server, helper)
+
+// Der Helper laeuft als langlebiger Kindprozess. Endet dieser Server regulaer,
+// schliesst Node dessen stdin und der Helper beendet sich beim EOF von selbst.
+// Bei einem Signal raeumt Node die Pipes nicht mehr auf — dann bliebe ein
+// verwaister Prozess mit offenem EventKit-Store zurueck.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    helper.stop()
+    process.exit(0)
+  })
+}
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
