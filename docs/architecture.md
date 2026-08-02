@@ -6,7 +6,8 @@
 
 - **`swift/main.swift`** — a Swift command-line tool wrapping EventKit. Its
   one-shot subcommands (`check-access`, `list-calendars`, `list-events`,
-  `create-event`) take a JSON payload on stdin and print a JSON result to
+  `create-event`, `update-event`, `delete-event`) take a JSON payload on stdin
+  and print a JSON result to
   stdout on success (exit 0), or `{"code": ..., "message": ...}` to stderr on
   failure (exit 1). The `serve` subcommand stays running instead and handles
   one JSON line per request on stdin, answering on stdout in the same
@@ -15,7 +16,7 @@
 - **`src/`** — a TypeScript MCP server that keeps one `calendar-helper serve`
   process running and talks to it over its stdin and stdout
   (`src/stdioRunner.ts`). It validates the helper's JSON with
-  [Zod](https://zod.dev) and exposes four MCP tools.
+  [Zod](https://zod.dev) and exposes six MCP tools.
 
 There is no third part. Earlier versions had a LaunchAgent and a Unix socket;
 both are gone, and the reason they existed is worth understanding, because it
@@ -181,14 +182,22 @@ the second. Use `serveLog()` in Swift, which writes to stderr.
 
 ## Scope
 
-Four tools: `list_calendars`, `list_events`, `create_event`,
-`find_free_time`. **`update_event` and `delete_event` are deliberately absent**
-— the data model carries `eventIdentifier` plus `occurrenceDate` so they can
-be added without restructuring, since `eventIdentifier` alone is not unique
-across recurring instances.
+Six tools: `list_calendars`, `list_events`, `create_event`, `update_event`,
+`delete_event`, `find_free_time`.
+
+The two writing tools arrived later than the rest, using the `eventIdentifier`
+plus `occurrenceDate` pair the data model had carried from the start —
+`eventIdentifier` alone names a recurring *series*, not one occurrence.
+
+`span` has no default on recurring events, deliberately. "Cancel this Tuesday"
+and "cancel every one from now on" cannot be undone, so omitting it is
+`INVALID_INPUT` rather than a quiet `thisEvent`. There is no `all` either:
+EventKit cannot reach occurrences in the past, so the name would promise more
+than it delivers.
 
 Also out of scope: Reminders (`EKReminder`), invitations and attendees,
-querying other people's availability, and any platform other than macOS.
+querying other people's availability, moving an event between calendars, and
+any platform other than macOS.
 
 ---
 

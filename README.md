@@ -29,6 +29,9 @@ answers **when am I free**:
 that "work" means weekdays during working hours, that "personal" means any
 day, and that all-day events usually shouldn't count as busy.
 
+It can also keep a buffer around each meeting, because a gap wedged directly
+between two calls is free on paper and useless in practice.
+
 Alongside that, the usual: list calendars, read events in a range with
 optional text search, create, update and delete events with location, notes,
 alarms, all-day or timed. Recurring events come back as individual

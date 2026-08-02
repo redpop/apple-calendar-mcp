@@ -67,6 +67,38 @@ used. Writing to a read-only calendar (for example a subscribed holiday
 calendar) fails with `CALENDAR_READONLY`. See the all-day alarm rule in
 [`docs/tools.md`](./tools.md) for what happens with `allDay: true`.
 
+## `update-event`
+
+```bash
+echo '{"eventIdentifier":"...","occurrenceDate":"2026-08-17T00:00:00+02:00","span":"this","title":"New title"}' \
+  | ./bin/calendar-helper update-event
+```
+
+Changes an existing event. Only the fields present in the payload are touched;
+anything omitted keeps its value. Get `eventIdentifier` from `list-events`.
+
+For a recurring event, both `occurrenceDate` and `span` are required — see the
+span rule under [`docs/tools.md`](./tools.md). Without them you get
+`INVALID_INPUT` explaining which one is missing and why.
+
+`alarmMinutesBefore` replaces the existing alarms rather than adding to them;
+`[]` removes them.
+
+## `delete-event`
+
+```bash
+echo '{"eventIdentifier":"...","occurrenceDate":"2026-08-24T00:00:00+02:00","span":"this"}' \
+  | ./bin/calendar-helper delete-event
+```
+
+Deletes an event and returns it as it was, since afterwards there is nothing
+left to look up. Same `span` rule as `update-event`.
+
+Returns `{"deleted": {...}, "span": "this"|"future"}`.
+
+Read-only calendars are rejected with `CALENDAR_READONLY`; an unknown
+identifier gives `EVENT_NOT_FOUND`.
+
 ## `serve`
 
 ```bash
