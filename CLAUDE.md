@@ -80,4 +80,8 @@ Hardened runtime requires `swift/calendar-helper.entitlements`. That file must c
 
 ## Scope
 
-v1 deliberately has no `update_event` or `delete_event`. The data model carries `eventIdentifier` plus `occurrenceDate` so they can be added without restructuring, since `eventIdentifier` alone is not unique across recurring instances.
+Six tools. `update_event` and `delete_event` were added in ACM-7, using the `eventIdentifier` plus `occurrenceDate` pair the data model had carried from the start — `eventIdentifier` alone names the series, not one occurrence.
+
+**`span` has no default on recurring events, on purpose.** `this` versus `future` is the difference between cancelling one Tuesday and cancelling every one from now on, and it cannot be undone. Omitting it is `INVALID_INPUT`, not a quiet `thisEvent`. There is no `all` either: EventKit cannot reach past occurrences, so the name would promise more than it delivers.
+
+Still out of scope: Reminders (`EKReminder`), invitations and attendees, moving an event between calendars, and any platform other than macOS.

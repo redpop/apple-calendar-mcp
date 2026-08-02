@@ -429,6 +429,183 @@ func commandCreateEvent() -> Never {
     }
 }
 
+// MARK: - Kommandos: update-event, delete-event
+
+/// Uebersetzt den `span`-Wert der Anfrage in einen EKSpan.
+///
+/// EventKit kennt nur zwei Weiten: diese eine Instanz, oder diese und alle
+/// folgenden. Ein "alle, auch vergangene" gibt es nicht — deshalb heisst der
+/// zweite Wert `future` und nicht `all`, damit der Name nicht mehr verspricht,
+/// als das System kann.
+func parseSpan(_ value: Any?) throws -> EKSpan {
+    guard let text = value as? String else {
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'span' is required for a recurring event: 'this' affects only this occurrence, 'future' affects this and all later ones.")
+    }
+    switch text {
+    case "this": return .thisEvent
+    case "future": return .futureEvents
+    default:
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'span' must be 'this' or 'future', was: \(text)")
+    }
+}
+
+/// Findet den Termin, den eine Anfrage meint.
+///
+/// `event(withIdentifier:)` liefert bei einer Serie das MASTER-Event, nicht
+/// die einzelne Instanz — wollte man darauf `.thisEvent` anwenden, traefe es
+/// die erste Instanz statt der gemeinten. Deshalb wird bei Wiederholungs-
+/// terminen ueber `occurrenceDate` die richtige Instanz gesucht.
+func findEvent(payload: [String: Any], store: EKEventStore) throws -> EKEvent {
+    guard let identifier = payload["eventIdentifier"] as? String, !identifier.isEmpty else {
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'eventIdentifier' is missing or empty. Get it from list_events.")
+    }
+
+    guard let base = store.event(withIdentifier: identifier) else {
+        throw HelperError(code: "EVENT_NOT_FOUND", message: "No event with identifier '\(identifier)' exists.")
+    }
+
+    guard base.hasRecurrenceRules else { return base }
+
+    guard payload["occurrenceDate"] != nil else {
+        throw HelperError(code: "INVALID_INPUT", message: "Field 'occurrenceDate' is required for a recurring event: 'eventIdentifier' alone names the series, not one occurrence.")
+    }
+    let occurrence = try parseDate(payload["occurrenceDate"], field: "occurrenceDate")
+
+    // Ein Tag Puffer nach beiden Seiten: der Aufrufer liefert die
+    // occurrenceDate zurueck, die er von list_events bekommen hat, aber eine
+    // Zeitzonenverschiebung dazwischen darf die Instanz nicht unauffindbar
+    // machen.
+    let calendar = Calendar.current
+    let windowStart = calendar.date(byAdding: .day, value: -1, to: occurrence) ?? occurrence
+    let windowEnd = calendar.date(byAdding: .day, value: 1, to: occurrence) ?? occurrence
+
+    let calendars = base.calendar.map { [$0] }
+    let predicate = store.predicateForEvents(withStart: windowStart, end: windowEnd, calendars: calendars)
+
+    // Auf die Sekunde genau vergleichen waere zu streng: ISO-Serialisierung
+    // und Rueckparsen koennen Sekundenbruchteile verlieren.
+    guard let instance = store.events(matching: predicate).first(where: { candidate in
+        candidate.eventIdentifier == identifier
+            && abs((candidate.occurrenceDate ?? candidate.startDate ?? Date.distantPast).timeIntervalSince(occurrence)) < 1
+    }) else {
+        throw HelperError(code: "EVENT_NOT_FOUND", message: "The series '\(identifier)' has no occurrence at \(isoOut.string(from: occurrence)).")
+    }
+
+    return instance
+}
+
+/// Stellt sicher, dass in den Kalender des Termins geschrieben werden darf.
+func requireWritable(_ event: EKEvent) throws {
+    guard let calendar = event.calendar else {
+        throw HelperError(code: "CALENDAR_NOT_FOUND", message: "The event has no calendar.")
+    }
+    guard calendar.allowsContentModifications else {
+        throw HelperError(code: "CALENDAR_READONLY", message: "Calendar '\(calendar.title)' does not allow modifications.")
+    }
+}
+
+func performUpdateEvent(payload: [String: Any], store: EKEventStore) throws -> [String: Any] {
+    let event = try findEvent(payload: payload, store: store)
+    try requireWritable(event)
+
+    let span = event.hasRecurrenceRules ? try parseSpan(payload["span"]) : EKSpan.thisEvent
+
+    // Nur uebergebene Felder aendern. Ein fehlendes Feld heisst "unveraendert
+    // lassen", nicht "leeren" — sonst wuerde eine Titelaenderung nebenbei die
+    // Notizen loeschen.
+    if let title = payload["title"] as? String {
+        guard !title.isEmpty else {
+            throw HelperError(code: "INVALID_INPUT", message: "Field 'title' must not be empty.")
+        }
+        event.title = title
+    }
+
+    let allDay = (payload["allDay"] as? Bool) ?? event.isAllDay
+    if payload["allDay"] != nil { event.isAllDay = allDay }
+
+    if payload["start"] != nil { event.startDate = try parseDate(payload["start"], field: "start") }
+    if payload["end"] != nil {
+        var end = try parseDate(payload["end"], field: "end")
+        // Dieselbe Normalisierung wie beim Anlegen: beide gaengigen
+        // Schreibweisen fuer das Ende eines ganztaegigen Termins muessen auf
+        // denselben Tag abbilden.
+        if allDay {
+            let normalized = inclusiveEndDay(end)
+            if normalized >= (event.startDate ?? normalized) { end = normalized }
+        }
+        event.endDate = end
+    }
+
+    if let start = event.startDate, let end = event.endDate, end < start {
+        throw HelperError(code: "INVALID_INPUT", message: "'end' must not be before 'start'.")
+    }
+
+    if let location = payload["location"] as? String { event.location = location }
+    if let notes = payload["notes"] as? String { event.notes = notes }
+    if let urlText = payload["url"] as? String { event.url = URL(string: urlText) }
+
+    // Alarme werden als Ganzes ersetzt, nicht ergaenzt: eine Liste zu
+    // uebergeben und dann eine laengere zurueckzubekommen waere ueberraschend.
+    if let alarms = payload["alarmMinutesBefore"] as? [Int] {
+        for existing in event.alarms ?? [] { event.removeAlarm(existing) }
+        for minutes in alarms {
+            event.addAlarm(EKAlarm(relativeOffset: alarmOffset(minutesBefore: minutes, allDay: allDay)))
+        }
+    }
+
+    do {
+        try store.save(event, span: span, commit: true)
+    } catch {
+        throw HelperError(code: "SAVE_FAILED", message: "The event could not be saved: \(error.localizedDescription)")
+    }
+
+    return ["event": serializeEvent(event)]
+}
+
+func performDeleteEvent(payload: [String: Any], store: EKEventStore) throws -> [String: Any] {
+    let event = try findEvent(payload: payload, store: store)
+    try requireWritable(event)
+
+    let span = event.hasRecurrenceRules ? try parseSpan(payload["span"]) : EKSpan.thisEvent
+
+    // Vor dem Loeschen serialisieren — danach sind die Felder nicht mehr
+    // verlaesslich abrufbar, und der Aufrufer soll erfahren, was verschwunden
+    // ist.
+    let removed = serializeEvent(event)
+
+    do {
+        try store.remove(event, span: span, commit: true)
+    } catch {
+        throw HelperError(code: "SAVE_FAILED", message: "The event could not be deleted: \(error.localizedDescription)")
+    }
+
+    return ["deleted": removed, "span": span == .futureEvents ? "future" : "this"]
+}
+
+func commandUpdateEvent() -> Never {
+    let store = EKEventStore()
+    ensureAccess(store)
+    do {
+        emit(try performUpdateEvent(payload: readPayload(), store: store))
+    } catch let error as HelperError {
+        fail(error.code, error.message)
+    } catch {
+        fail("INTERNAL_ERROR", "Unexpected error: \(error.localizedDescription)")
+    }
+}
+
+func commandDeleteEvent() -> Never {
+    let store = EKEventStore()
+    ensureAccess(store)
+    do {
+        emit(try performDeleteEvent(payload: readPayload(), store: store))
+    } catch let error as HelperError {
+        fail(error.code, error.message)
+    } catch {
+        fail("INTERNAL_ERROR", "Unexpected error: \(error.localizedDescription)")
+    }
+}
+
 // MARK: - Gemeinsamer Dispatcher (Einzelkommando und Serve-Modus nutzen dieselbe Logik)
 
 /// Fuehrt ein Kommando aus und liefert dessen Ergebnis-Payload oder wirft
@@ -444,6 +621,10 @@ func executeCommand(_ command: String, payload: [String: Any], store: EKEventSto
         return try performListEvents(payload: payload, store: store)
     case "create-event":
         return try performCreateEvent(payload: payload, store: store)
+    case "update-event":
+        return try performUpdateEvent(payload: payload, store: store)
+    case "delete-event":
+        return try performDeleteEvent(payload: payload, store: store)
     default:
         throw HelperError(code: "INVALID_INPUT", message: "Unknown command: \(command)")
     }
@@ -670,7 +851,7 @@ reexecDisclaimed()
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("INVALID_INPUT", "No command given. Expected one of: check-access, list-calendars, list-events, create-event, serve.")
+    fail("INVALID_INPUT", "No command given. Expected one of: check-access, list-calendars, list-events, create-event, update-event, delete-event, serve.")
 }
 
 switch arguments[1] {
@@ -682,6 +863,10 @@ case "list-events":
     commandListEvents()
 case "create-event":
     commandCreateEvent()
+case "update-event":
+    commandUpdateEvent()
+case "delete-event":
+    commandDeleteEvent()
 case "serve":
     commandServe()
 default:

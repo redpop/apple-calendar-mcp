@@ -26,6 +26,8 @@ const MESSAGES: Record<string, string> = {
     'No calendar with that identifier exists. Call list_calendars to get valid identifiers; they are not guessable and can change between machines.',
   CALENDAR_READONLY:
     'That calendar is read-only, which is normal for subscribed and holiday calendars. Call list_calendars and pick one where allowsModifications is true.',
+  EVENT_NOT_FOUND:
+    'No such event. Identifiers come from list_events and are not stable across machines; for a recurring event, occurrenceDate must name an occurrence that actually exists.',
   INVALID_INPUT: 'The request was rejected as invalid.',
   SAVE_FAILED: 'The event could not be saved to the calendar store.',
   HELPER_MISSING:

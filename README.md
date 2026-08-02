@@ -30,9 +30,15 @@ that "work" means weekdays during working hours, that "personal" means any
 day, and that all-day events usually shouldn't count as busy.
 
 Alongside that, the usual: list calendars, read events in a range with
-optional text search, create events with location, notes, alarms, all-day or
-timed. Recurring events come back as individual occurrences, not as the
-master event — a detail AppleScript-based servers routinely get wrong.
+optional text search, create, update and delete events with location, notes,
+alarms, all-day or timed. Recurring events come back as individual
+occurrences, not as the master event — a detail AppleScript-based servers
+routinely get wrong.
+
+Changing or deleting an occurrence of a recurring event requires saying
+explicitly whether you mean just that one or every later one too. There is
+no default for that, because "cancel this Tuesday" and "never again" are not
+the kind of thing to guess at.
 
 Full parameter reference: [`docs/tools.md`](./docs/tools.md).
 

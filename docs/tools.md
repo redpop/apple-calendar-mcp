@@ -2,12 +2,23 @@
 
 [← Back to README](../README.md)
 
-The server exposes four tools, registered in `src/tools/`. All four have
-`openWorldHint: false`. The three read tools (`list_calendars`,
-`list_events`, `find_free_time`) are `readOnlyHint: true` and idempotent;
-`create_event` is not read-only, not idempotent (calling it twice creates
-two events), and explicitly not destructive (it never modifies or deletes
-existing events).
+The server exposes six tools, registered in `src/tools/`. All have
+`openWorldHint: false`.
+
+| Tool | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|---|---|---|---|
+| `list_calendars` | true | — | true |
+| `list_events` | true | — | true |
+| `find_free_time` | true | — | true |
+| `create_event` | false | **false** | false |
+| `update_event` | false | **true** | false |
+| `delete_event` | false | **true** | true |
+
+These annotations are functional, not decorative: clients group tools by
+them and decide what to confirm before running. `create_event` is not
+destructive because it only ever adds; `update_event` overwrites existing
+values and `delete_event` removes them. `delete_event` is idempotent —
+deleted twice stays deleted.
 
 ## `list_calendars`
 
@@ -52,6 +63,61 @@ Creates a new event. Input:
 Read-only calendars are rejected with a clear error. This tool never
 modifies or deletes existing events — that capability does not exist in
 this version (see "Scope" in [`docs/architecture.md`](./architecture.md)).
+
+## `update_event`
+
+Changes an existing event. Only the fields you pass are changed; anything
+left out keeps its current value — a title change does not wipe the notes.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `eventIdentifier` | string | yes | From `list_events`. For a recurring event this names the *series* |
+| `occurrenceDate` | ISO 8601 datetime with offset | for recurring events | The instance to change, exactly as returned by `list_events` |
+| `span` | `this` \| `future` | for recurring events | How far the change reaches |
+| `title` | string | no | Must not be empty if given |
+| `start` / `end` | ISO 8601 datetime with offset | no | Same all-day normalisation as `create_event` |
+| `allDay` | boolean | no | Converts between timed and all-day |
+| `location` / `notes` / `url` | string | no | Replace the previous value |
+| `alarmMinutesBefore` | integer array | no | **Replaces** all alarms; pass `[]` to remove them |
+
+Read-only calendars are rejected with `CALENDAR_READONLY`. An unknown
+identifier gives `EVENT_NOT_FOUND`.
+
+Moving an event to a different calendar is deliberately not supported —
+`calendarId` is not accepted here.
+
+## `delete_event`
+
+Deletes an event and returns it as it was, since afterwards it cannot be
+looked up any more.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `eventIdentifier` | string | yes | From `list_events` |
+| `occurrenceDate` | ISO 8601 datetime with offset | for recurring events | The instance to delete |
+| `span` | `this` \| `future` | for recurring events | How far the deletion reaches |
+
+Returns `{ deleted, span }`.
+
+### The `span` rule
+
+For recurring events, `span` is **required and has no default**. The
+difference between "cancel this Tuesday" and "never again from now on" is
+large and cannot be undone, so the server refuses to guess: omitting it
+gives `INVALID_INPUT` with an explanation rather than a quiet `thisEvent`.
+
+The two values map to EventKit's two spans:
+
+| `span` | Effect |
+|---|---|
+| `this` | Only the occurrence named by `occurrenceDate` |
+| `future` | That occurrence and every later one |
+
+There is deliberately no `all`: EventKit cannot reach occurrences in the
+past, and a name promising otherwise would be a lie.
+
+`occurrenceDate` is required for the same reason — `eventIdentifier` alone
+names the series, not one of its occurrences.
 
 ## `find_free_time`
 

@@ -83,6 +83,51 @@ export const findFreeTimeInput = z.object({
     ),
 })
 
+/**
+ * Wie weit eine Aenderung an einem Wiederholungstermin reicht.
+ *
+ * EventKit kennt nur diese zwei Weiten. Ein "alle, auch vergangene" gibt es
+ * nicht — deshalb `future` statt `all`, damit der Name nicht mehr verspricht,
+ * als das System kann.
+ */
+const eventSpan = z
+  .enum(['this', 'future'])
+  .describe(
+    "How far the change reaches on a recurring event. 'this' affects only the occurrence named by occurrenceDate; 'future' affects that occurrence and every later one. Required for recurring events, ignored otherwise.",
+  )
+
+/** Identifiziert einen Termin — bei Serien braucht es beide Felder. */
+const eventTarget = {
+  eventIdentifier: z
+    .string()
+    .min(1)
+    .describe('Identifier of the event, from list_events. For a recurring event this names the series, not one occurrence.'),
+  occurrenceDate: z
+    .string()
+    .optional()
+    .describe('The occurrenceDate of the specific instance, exactly as returned by list_events. Required for recurring events.'),
+  span: eventSpan.optional(),
+}
+
+export const updateEventInput = z.object({
+  ...eventTarget,
+  // Alle Felder optional: ein weggelassenes Feld bleibt unveraendert, es
+  // wird nicht geleert.
+  title: z.string().min(1).optional().describe('New title'),
+  start: isoDateTime.optional().describe('New start, ISO 8601 with offset'),
+  end: isoDateTime.optional().describe('New end, ISO 8601 with offset'),
+  allDay: z.boolean().optional().describe('Turn the event into an all-day event, or back'),
+  location: z.string().optional().describe('New location'),
+  notes: z.string().optional().describe('New notes, replacing the previous ones'),
+  url: z.string().optional().describe('New associated URL'),
+  alarmMinutesBefore: z
+    .array(z.number().int().nonnegative())
+    .optional()
+    .describe('Replaces all existing alarms. Pass an empty array to remove them.'),
+})
+
+export const deleteEventInput = z.object(eventTarget)
+
 // MARK: Antworten der Swift-CLI
 
 export const eventSchema = z.object({
@@ -123,9 +168,18 @@ export const listEventsOutput = z.object({
 
 export const createEventOutput = z.object({ event: eventSchema })
 
+export const updateEventOutput = z.object({ event: eventSchema })
+
+export const deleteEventOutput = z.object({
+  deleted: eventSchema,
+  span: z.enum(['this', 'future']),
+})
+
 // MARK: Abgeleitete Typen
 
 export type ListEventsInput = z.infer<typeof listEventsInput>
 export type CreateEventInput = z.infer<typeof createEventInput>
 export type FindFreeTimeInput = z.infer<typeof findFreeTimeInput>
+export type UpdateEventInput = z.infer<typeof updateEventInput>
+export type DeleteEventInput = z.infer<typeof deleteEventInput>
 export type CalendarEvent = z.infer<typeof eventSchema>

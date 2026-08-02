@@ -73,14 +73,28 @@ function registeredTools(server: McpServer): Record<string, { callback: Function
 }
 
 describe('registerTools', () => {
-  it('registriert genau die vier Tools der Spezifikation', () => {
+  it('registriert genau die sechs Tools der Spezifikation', () => {
     const { server } = buildServer(() => ({}))
     expect(Object.keys(registeredTools(server)).sort()).toEqual([
       'create_event',
+      'delete_event',
       'find_free_time',
       'list_calendars',
       'list_events',
+      'update_event',
     ])
+  })
+
+  it('markiert nur die loeschenden Tools als destruktiv', () => {
+    const { server } = buildServer(() => ({}))
+    const tools = registeredTools(server)
+
+    // create_event legt nur an; update_event ueberschreibt bestehende Werte
+    // und delete_event entfernt sie. Genau nach dieser Unterscheidung
+    // gruppieren Clients ihre Rueckfragen — sie darf nicht verwaessern.
+    expect(tools['create_event']?.annotations?.['destructiveHint']).toBe(false)
+    expect(tools['update_event']?.annotations?.['destructiveHint']).toBe(true)
+    expect(tools['delete_event']?.annotations?.['destructiveHint']).toBe(true)
   })
 
   it('markiert alle Lesetools als readOnly, damit sie ohne Rückfrage laufen dürfen', () => {
@@ -99,7 +113,7 @@ describe('registerTools', () => {
     expect(annotations?.['idempotentHint']).toBe(false)
   })
 
-  it('erklärt alle vier Tools als nicht netzwerkgebunden', () => {
+  it('erklärt alle Tools als nicht netzwerkgebunden', () => {
     const { server } = buildServer(() => ({}))
     const tools = registeredTools(server)
     for (const name of Object.keys(tools)) {
@@ -290,5 +304,105 @@ describe('Fehlerbehandlung', () => {
     const result = await tool?.callback({})
 
     expect(result.isError).toBe(true)
+  })
+})
+
+describe('update_event', () => {
+  it('reicht nur die uebergebenen Felder an die CLI weiter', async () => {
+    const { server, calls } = buildServer(() => ({ event: sampleEvent }))
+    const tool = registeredTools(server)['update_event']
+
+    await tool?.callback({
+      eventIdentifier: 'ABC',
+      title: 'Zahnarzt verschoben',
+    })
+
+    expect(calls[0]?.command).toBe('update-event')
+    expect(calls[0]?.payload['title']).toBe('Zahnarzt verschoben')
+    // Ein weggelassenes Feld heisst "unveraendert lassen", nicht "leeren".
+    // Als undefined durchgereicht, faellt es beim JSON-Kodieren weg und die
+    // Swift-Seite fasst es nicht an.
+    expect(calls[0]?.payload['notes']).toBeUndefined()
+    expect(calls[0]?.payload['start']).toBeUndefined()
+  })
+
+  it('reicht occurrenceDate und span fuer Wiederholungstermine durch', async () => {
+    const { server, calls } = buildServer(() => ({ event: sampleEvent }))
+    const tool = registeredTools(server)['update_event']
+
+    await tool?.callback({
+      eventIdentifier: 'ABC',
+      occurrenceDate: '2026-08-05T10:00:00+02:00',
+      span: 'future',
+      location: 'Praxis Nord',
+    })
+
+    expect(calls[0]?.payload['occurrenceDate']).toBe('2026-08-05T10:00:00+02:00')
+    expect(calls[0]?.payload['span']).toBe('future')
+  })
+
+  it('gibt den geaenderten Termin zurueck', async () => {
+    const { server } = buildServer(() => ({
+      event: { ...sampleEvent, title: 'Neuer Titel' },
+    }))
+    const tool = registeredTools(server)['update_event']
+
+    const result = await tool?.callback({ eventIdentifier: 'ABC', title: 'Neuer Titel' })
+
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toContain('Neuer Titel')
+  })
+
+  it('meldet einen unbekannten Termin verstaendlich', async () => {
+    const { server } = buildServer(() => {
+      throw new HelperError('EVENT_NOT_FOUND', 'nope')
+    })
+    const tool = registeredTools(server)['update_event']
+
+    const result = await tool?.callback({ eventIdentifier: 'weg' })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('list_events')
+  })
+})
+
+describe('delete_event', () => {
+  it('reicht Kennung und span an die CLI weiter', async () => {
+    const { server, calls } = buildServer(() => ({ deleted: sampleEvent, span: 'this' }))
+    const tool = registeredTools(server)['delete_event']
+
+    await tool?.callback({
+      eventIdentifier: 'ABC',
+      occurrenceDate: '2026-08-05T10:00:00+02:00',
+      span: 'this',
+    })
+
+    expect(calls[0]?.command).toBe('delete-event')
+    expect(calls[0]?.payload['eventIdentifier']).toBe('ABC')
+    expect(calls[0]?.payload['span']).toBe('this')
+  })
+
+  it('gibt den geloeschten Termin samt Weite zurueck', async () => {
+    const { server } = buildServer(() => ({ deleted: sampleEvent, span: 'future' }))
+    const tool = registeredTools(server)['delete_event']
+
+    const result = await tool?.callback({ eventIdentifier: 'ABC', span: 'future' })
+
+    // Was verschwunden ist, muss in der Antwort stehen — danach laesst es
+    // sich nicht mehr nachschlagen.
+    expect(result.content[0].text).toContain('Zahnarzt')
+    expect(result.content[0].text).toContain('future')
+  })
+
+  it('reicht einen schreibgeschuetzten Kalender als Klartext durch', async () => {
+    const { server } = buildServer(() => {
+      throw new HelperError('CALENDAR_READONLY', 'Feiertage')
+    })
+    const tool = registeredTools(server)['delete_event']
+
+    const result = await tool?.callback({ eventIdentifier: 'ABC' })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('read-only')
   })
 })
