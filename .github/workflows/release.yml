@@ -161,9 +161,14 @@ jobs:
             console.log("Paket: " + pack.name + "@" + pack.version + ", " + pack.entryCount + " Dateien");
           '
 
+      # Ohne Token: npm erkennt die OIDC-Umgebung von GitHub Actions selbst und
+      # holt sich ein kurzlebiges Zugriffsrecht. Voraussetzung ist der auf
+      # npmjs.com hinterlegte Trusted Publisher (dieses Repository, diese
+      # Workflow-Datei) und `id-token: write` oben. Ein langlebiges NPM_TOKEN
+      # gibt es hier bewusst nicht mehr — es wurde nur fuer den allerersten
+      # Publish gebraucht, weil Trusted Publishing ein bereits existierendes
+      # Paket voraussetzt.
       - name: Auf npm veroeffentlichen
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
 
       - name: GitHub-Release anlegen
