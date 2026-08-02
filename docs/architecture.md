@@ -2,147 +2,192 @@
 
 [← Back to README](../README.md)
 
-## The three parts
+## The two parts
 
-- **`swift/main.swift`** — a Swift command-line tool that wraps EventKit.
-  Most of its subcommands (`check-access`, `list-calendars`, `list-events`,
-  `create-event`) are one-shot: invoked with a single subcommand and, where
-  needed, a JSON payload on stdin, they print a JSON result to stdout on
-  success (exit code 0) or a JSON error object `{"code": ..., "message":
-  ...}` to stderr (exit code 1) on failure. The `serve` subcommand is
-  different: it stays running as a long-lived daemon, listening on a Unix
-  domain socket and handling one JSON request per connection in the same
-  `{"command": ..., "payload": ...}` / `{"ok": ..., ...}` shape. Either way,
-  it never touches stdout except for that one JSON reply, and it can only be
-  invoked with hardcoded arguments — it has no other externally reachable
-  behavior.
-- **`launchagent/`** — install/uninstall scripts that register `calendar-helper
-  serve` as a per-user LaunchAgent, so it starts automatically at login and
-  is restarted if it dies. This is not an optional convenience layer; see
-  "Why a LaunchAgent" below for why it's required.
-- **`src/`** — a TypeScript MCP server that, for every tool call, connects to
-  the helper's Unix socket (`src/socketRunner.ts`) and falls back to spawning
-  the helper binary directly (`src/helper.ts`) only if the socket isn't
-  reachable. It validates the helper's JSON with [Zod](https://zod.dev) and
-  exposes four MCP tools to the client.
+- **`swift/main.swift`** — a Swift command-line tool wrapping EventKit. Its
+  one-shot subcommands (`check-access`, `list-calendars`, `list-events`,
+  `create-event`) take a JSON payload on stdin and print a JSON result to
+  stdout on success (exit 0), or `{"code": ..., "message": ...}` to stderr on
+  failure (exit 1). The `serve` subcommand stays running instead and handles
+  one JSON line per request on stdin, answering on stdout in the same
+  `{"command": ..., "payload": ...}` / `{"ok": ..., ...}` shape. Either way
+  it writes nothing to stdout but those replies.
+- **`src/`** — a TypeScript MCP server that keeps one `calendar-helper serve`
+  process running and talks to it over its stdin and stdout
+  (`src/stdioRunner.ts`). It validates the helper's JSON with
+  [Zod](https://zod.dev) and exposes four MCP tools.
 
-## Why a LaunchAgent, not a spawned child process
+There is no third part. Earlier versions had a LaunchAgent and a Unix socket;
+both are gone, and the reason they existed is worth understanding, because it
+still shapes everything else.
 
-Earlier versions of this project spawned `bin/calendar-helper` as a child
-process of the MCP server for every request. **That does not work under
-Claude Desktop, and it cannot be made to work.** Two independent macOS
-mechanisms rule it out:
+## The permission problem
 
-**1. TCC grants calendar access to the responsible parent process, not to
-the binary that actually calls EventKit.** When a sandboxed or unentitled
-process asks for calendar access, macOS attributes the request to whichever
-app is ultimately responsible for having launched it — and it looks up that
-app's usage-description string to decide whether to even show a dialog.
-Claude Desktop declares no calendar usage description anywhere in its app
-bundle (verified by inspecting every `Info.plist` inside
-`/Applications/Claude.app`). That means anything Claude Desktop spawns is
-permanently denied calendar access: no dialog appears, no entry shows up in
-System Settings, and there is no switch to flip — short of Anthropic adding
-that usage description to Claude Desktop itself, there is nothing this
-project can do about it from the child-process side. This was confirmed
-directly: called from a Claude-Desktop-spawned child process, the binary
-returns `PERMISSION_DENIED`; the very same process, going through the socket
-instead, reaches all six calendars.
+macOS grants calendar access to the **responsible parent process**, not to
+the binary that calls EventKit. When an unentitled process asks for access,
+the system attributes the request to whichever app is ultimately responsible
+for launching it, and looks up *that* app's usage-description string to
+decide whether to even show a dialog.
 
-Running the helper under `launchd` instead sidesteps the problem entirely —
-`launchd` is the helper's responsible process, so it gets its own TCC
-identity. It asks for access under its own name and shows up as
-`calendar-helper` in System Settings → Privacy & Security → Calendars, with
-its own dialog and its own grant. The MCP server then reaches it as a client
-over a Unix socket rather than launching it.
+A GUI client like Claude Desktop declares no calendar usage description
+anywhere in its bundle. So anything it spawns is denied: no dialog, no entry
+in System Settings, no switch to flip. Verified directly — called from a
+process the client started, the helper returned `PERMISSION_DENIED`; the same
+binary invoked from a terminal reached all six calendars.
 
-**2. Code signing determines whether the grant survives a rebuild.** With
-ad-hoc signing (`codesign --sign -`), macOS binds the grant to the code
-hash, which changes on every build — so a rebuilt binary looks like a
-different, ungranted program, and macOS refuses it *silently*, without ever
-offering a dialog. With a Developer ID certificate, the grant binds to
-bundle ID + team ID instead, so it survives rebuilds and even a later
-certificate renewal. `swift/build.sh` picks whichever is available: it uses
-a Developer ID identity automatically if one is installed
-(`security find-identity -v -p codesigning`), and falls back to ad-hoc
-signing otherwise. Most readers of this project will not have a Developer ID
-certificate, so both paths matter — see [`docs/troubleshooting.md`](./troubleshooting.md)
-for what each implies in practice.
+This is not a niche problem. Comparable MCP calendar servers hit it too, and
+their documented workaround is to tell users to launch their client from a
+terminal so the terminal's own grant is inherited.
 
-**3. Hardened runtime requires an explicit calendar entitlement.** Developer
-ID signing, as used here, enables the hardened runtime (and notarization
-would require it too). With hardened runtime on, macOS demands the
-`com.apple.security.personal-information.calendars` entitlement before it
-will even consider a calendar request — without it, the request is refused
-with no dialog at all, even immediately after a `tccutil reset`.
-`swift/calendar-helper.entitlements` declares exactly that one entitlement.
-One easy-to-hit trap: the entitlements plist must contain **no XML
-comments** — Apple's AMFI parser rejects them with a syntax error, not a
-helpful message.
+## How the helper escapes it
 
-## The Unix socket
+At startup, before touching EventKit, the helper **disclaims the
+responsibility it inherited** and re-executes itself:
 
-`launchd` starts `calendar-helper serve`, which listens on a Unix domain
-socket at `~/Library/Application Support/apple-calendar-mcp/helper.sock`
-(mode `0600`, owner-only), rather than exiting after a single call. The
-TypeScript MCP server connects to that socket for every tool call
-(`src/socketRunner.ts`) and only falls back to spawning the helper binary
-directly (`src/helper.ts`) if the socket isn't reachable — a fallback that
-only actually works when the MCP server's own parent process already holds
-the calendar grant (e.g. a terminal), not under Claude Desktop. The socket
-path can be overridden on the Node side with the `APPLE_CALENDAR_SOCKET`
-environment variable, and on the Swift side with `--socket` (see
-[`docs/cli.md`](./cli.md)).
+```swift
+posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC))
+responsibility_spawnattrs_setdisclaim(&attributes, 1)
+posix_spawn(&pid, executable, nil, &attributes, &arguments, &environment)
+```
 
-Before it starts listening, `serve` checks calendar access once, waiting up
-to 30 seconds for a decision; if nothing arrives in that window it exits
-with `PERMISSION_TIMEOUT` rather than hanging forever with no explanation.
+`POSIX_SPAWN_SETEXEC` replaces the process image in place, so no extra
+process appears and stdio, exit codes and signals pass through untouched.
+`responsibility_spawnattrs_setdisclaim` drops the parent's TCC
+responsibility, which makes the binary its own responsible process. macOS
+then reads the usage description from *its* embedded `Info.plist` and prompts
+under the name `calendar-helper`.
 
-## Installed layout
+An environment marker (`CALENDAR_HELPER_DISCLAIMED`) breaks what would
+otherwise be an infinite re-exec loop.
 
-The socket-serving binary is installed to
-`~/Library/Application Support/apple-calendar-mcp/calendar-helper` —
-deliberately outside the repo, copied there by `launchagent/install.sh`. This
-is not just tidiness: a LaunchAgent that pointed at `bin/calendar-helper`
-inside your checkout would break the moment you moved the project or ran `git
-clean` on `bin/`. The LaunchAgent plist itself lives at
-`~/Library/LaunchAgents/io.github.apple-calendar-mcp.helper.plist`, its log
-at `~/Library/Logs/apple-calendar-mcp.log`, and the socket at
-`~/Library/Application Support/apple-calendar-mcp/helper.sock`. None of this
-depends on where you cloned the repo.
+`responsibility_spawnattrs_setdisclaim` is private libSystem API, available
+since macOS 10.14 — the same call Chromium uses to make its helper processes
+self-responsible. It is resolved through `dlsym` at runtime rather than
+linked, so a future macOS dropping the symbol degrades to the old, broken
+behaviour instead of failing to load.
+
+One grant obtained this way covers every MCP client on the machine.
+
+## One long-lived process, not one per request
+
+The helper could be spawned per tool call. It isn't, because process start,
+the disclaim re-exec, `EKEventStore` setup and the TCC check would then be
+paid every single time. Measured on an M-series Mac with six calendars:
+
+| | |
+|---|---|
+| first call | 324 ms |
+| every call after | 1 ms |
+
+`src/stdioRunner.ts` starts the helper lazily on the first tool call — not at
+server startup, so the permission dialog appears when someone actually asks
+about their calendar rather than when they open their client. Requests are
+queued FIFO and carry an `id` the helper mirrors back; the serve loop is
+strictly sequential, so the id isn't needed for correlation, but it turns a
+desynchronisation into a loud failure instead of silently swapped answers.
+
+When the MCP server exits, Node closes the helper's stdin, the helper sees
+EOF and exits. If it crashes, pending requests are rejected with
+`HELPER_CRASHED` and the next call starts a fresh one.
+
+The first request after a start gets a 35-second deadline, later ones 10
+seconds. `serve` waits up to 30 seconds for the TCC answer at startup, and a
+human may need to click a dialog in that window. **The two deadlines belong
+together** — changing one without the other breaks first-run setup.
+
+## Where the helper runs from
+
+Not from the package directory. `src/helperInstall.ts` copies it to
+`~/Library/Application Support/apple-calendar-mcp/bin/calendar-helper` on
+first use and spawns it from there.
+
+The reason is measurable: **macOS binds a command-line tool's calendar grant
+to its path.** A byte-identical copy at a different path triggers a fresh
+permission dialog and gets its own entry in System Settings. The code hash,
+by contrast, is irrelevant — the binary here was rebuilt twice after being
+granted access and kept working.
+
+Since npm unpacks packages under version-dependent paths, running the helper
+from where npm put it would prompt again on every update. A fixed path avoids
+that entirely.
+
+Copying goes through a `.tmp` file and `rename()`. A running binary cannot be
+overwritten on macOS (ETXTBSY), and deleting the target first would briefly
+give up the very path the grant hangs on; `rename()` replaces only the
+directory entry, and an already-running process keeps its old inode.
+
+If any of that fails, the packaged path is used instead — the grant then
+follows the moving path and updates re-prompt, but the server works.
+
+## Code signing
+
+`swift/build.sh` uses a Developer ID certificate when one is installed and
+falls back to ad-hoc signing otherwise. The difference matters:
+
+- **Ad-hoc** binds the grant to the code hash, which changes on every build.
+  A rebuilt binary looks like a different, ungranted program, and macOS
+  refuses it *silently*, without offering a dialog.
+- **Developer ID** survives rebuilds. Released binaries are signed this way,
+  which is why an update never costs a second permission dialog.
+
+Developer ID signing enables the hardened runtime, and with it macOS demands
+the `com.apple.security.personal-information.calendars` entitlement before it
+will consider a calendar request at all — without it the request is refused
+with no dialog, even right after a `tccutil reset`.
+`swift/calendar-helper.entitlements` declares exactly that.
+
+One easy trap: that entitlements plist must contain **no XML comments**.
+Apple's AMFI parser rejects them with a syntax error rather than anything
+helpful.
+
+## Universal binary
+
+The helper ships inside the npm package, so it is built for both `arm64` and
+`x86_64` against a macOS 14 deployment target and joined with `lipo`. An
+arm64-only build would break on Intel Macs — and only at the user's end,
+never at build time. Signing happens on the finished fat binary, since `lipo`
+would invalidate per-slice signatures anyway. CI asserts both architectures
+are present on every pull request.
 
 ## Why free-slot computation lives in TypeScript
 
-`find_free_time` computes free gaps purely in TypeScript
-(`src/freeTime.ts`) from the events `list_events` returns — it does not call
-a separate Swift helper command. EventKit's job is limited to fetching
-events; everything about turning a list of busy events into a list of free
-slots (working-hours windows, day-of-week filtering, gap arithmetic) is
-ordinary logic with no dependency on EventKit or the Swift/TCC machinery, so
-it lives on the TypeScript side where it's easier to test (see
-`tests/freeTime.test.ts`) and doesn't need a live calendar or a granted TCC
-permission to run in CI.
+`find_free_time` computes free gaps purely in TypeScript (`src/freeTime.ts`)
+from the events `list_events` returns. EventKit's job is limited to fetching
+events; turning a list of busy events into a list of free slots is ordinary
+arithmetic with no dependency on EventKit or the TCC machinery.
+
+That module has zero imports and reads no clock, which is why the project's
+real test coverage lives there rather than in Swift — it runs in CI with no
+calendar and no permission.
 
 ## Development
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm test            # vitest run
-npm run build       # compile TypeScript to dist/
-npm run build:helper  # compile + sign the Swift helper (equivalent to ./swift/build.sh)
+npm run typecheck     # tsc --noEmit
+npm test              # vitest run
+npm run build         # compile TypeScript to dist/
+npm run build:helper  # compile + sign the Swift helper (universal)
 ```
 
-The test suite (`tests/`) covers the TypeScript layer only — schemas, the
-free-time algorithm, error handling, and tool wiring — since the Swift
-helper needs a real calendar and a live TCC grant that CI does not have.
+The test suite covers the TypeScript layer — schemas, the free-time
+algorithm, error handling, tool wiring, the stdio transport and the install
+path. The Swift helper needs a real calendar and a live TCC grant, which CI
+does not have.
+
+Note that stdout carries protocol on **both** legs: MCP messages between
+client and Node, NDJSON between Node and the helper. A stray `console.log` in
+`src/` corrupts the first; a stray `print()` in `swift/main.swift` corrupts
+the second. Use `serveLog()` in Swift, which writes to stderr.
 
 ## Scope
 
-This version implements four tools: `list_calendars`, `list_events`,
-`create_event`, and `find_free_time`. **`update_event` and `delete_event`
-are deliberately not included** in this version — the data model has fields
-that would support them later, but the operations themselves don't exist
-yet. Also out of scope: Reminders (`EKReminder`), invitations/attendees,
+Four tools: `list_calendars`, `list_events`, `create_event`,
+`find_free_time`. **`update_event` and `delete_event` are deliberately absent**
+— the data model carries `eventIdentifier` plus `occurrenceDate` so they can
+be added without restructuring, since `eventIdentifier` alone is not unique
+across recurring instances.
+
+Also out of scope: Reminders (`EKReminder`), invitations and attendees,
 querying other people's availability, and any platform other than macOS.
 
 ---

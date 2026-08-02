@@ -1,122 +1,172 @@
 # apple-calendar-mcp
 
-A local [MCP](https://modelcontextprotocol.io) server that lets Claude read
-and create events in Apple Calendar on macOS. **macOS only** — it uses
-Apple's EventKit framework, which has no cross-platform equivalent.
+An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
+read and create events in Apple Calendar — and work out when you actually
+have time.
 
-## What Claude can do with it
+**macOS only.** It talks to EventKit, Apple's own calendar framework, which
+has no cross-platform equivalent.
 
-- **List your calendars** — see every calendar configured in Calendar.app,
-  including iCloud calendars.
-- **List events** in a time range, with optional text search.
-- **Create a new event** — title, time, location, notes, alarms, all-day or
-  timed.
-- **Find free time** — get open slots of a given length, restricted to
-  working hours, personal hours, or any time at all.
+```bash
+claude mcp add apple-calendar -- npx -y @redpop/apple-calendar-mcp
+```
 
-Full details, including all parameters: [`docs/tools.md`](./docs/tools.md).
+No Xcode, no Swift toolchain, no repository clone. The signed helper binary
+ships inside the package.
+
+## What it does
+
+Most calendar integrations answer *what is on my calendar*. This one also
+answers **when am I free**:
+
+```
+"Find me two hours for deep work this week, outside meetings"
+"When could I fit a 30-minute call with someone in Berlin?"
+"Book focus time Thursday morning"
+```
+
+`find_free_time` returns the open gaps, not the busy blocks. It understands
+that "work" means weekdays during working hours, that "personal" means any
+day, and that all-day events usually shouldn't count as busy.
+
+Alongside that, the usual: list calendars, read events in a range with
+optional text search, create events with location, notes, alarms, all-day or
+timed. Recurring events come back as individual occurrences, not as the
+master event — a detail AppleScript-based servers routinely get wrong.
+
+Full parameter reference: [`docs/tools.md`](./docs/tools.md).
 
 ## Requirements
 
 - macOS 14 (Sonoma) or newer
 - Node.js 20 or newer
-- Xcode **Command Line Tools** (`xcode-select --install`) — a full Xcode
-  install is not needed
 
-## Installation
+Nothing else. Building from source additionally needs Xcode Command Line
+Tools, but installing from npm does not.
 
-Run these from the root of this repository, in order.
+## Setup
 
-**1. Install and build.**
+**1. Add the server to your client.**
+
+<details open>
+<summary><strong>Claude Code</strong></summary>
 
 ```bash
-npm install
-npm run build
-./swift/build.sh
+claude mcp add apple-calendar -- npx -y @redpop/apple-calendar-mcp
 ```
 
-This installs the Node dependencies, compiles the TypeScript server to
-`dist/`, and compiles + signs the Swift calendar helper to
-`bin/calendar-helper`.
+</details>
 
-**2. Configure Claude Desktop.**
+<details>
+<summary><strong>Claude Desktop</strong></summary>
 
-**Quit Claude Desktop first (Cmd+Q).** It rewrites its own config file on
-exit, so editing it while Claude Desktop is still running gets your change
-silently discarded.
-
-Then add this to
-`~/Library/Application Support/Claude/claude_desktop_config.json`,
-replacing the path with the absolute path to `dist/index.js` in *this*
-checkout:
+Quit Claude Desktop first (Cmd+Q) — it rewrites its config on exit, so
+editing while it runs discards your change. Then add to
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "apple-calendar": {
-      "command": "node",
-      "args": ["/absolute/path/to/apple-calendar-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@redpop/apple-calendar-mcp"]
     }
   }
 }
 ```
 
-**3. Start Claude Desktop again.**
+</details>
 
-It only reads the config file on startup, so this is what picks up the new
-server.
+<details>
+<summary><strong>Cursor, Windsurf, Zed and other MCP clients</strong></summary>
 
-**4. Grant calendar access on first use.**
+Any client that speaks MCP over stdio works. The command is `npx`, the
+arguments are `-y @redpop/apple-calendar-mcp`, and no environment variables
+are needed.
 
-Ask Claude "what calendars do I have?". A system dialog appears, asking to
-let **calendar-helper** access your calendar — not Claude, the helper itself.
-Click **OK**, then open **System Settings → Privacy & Security → Calendars →
+</details>
+
+**2. Grant calendar access on first use.**
+
+Ask your assistant *"what calendars do I have?"*. A system dialog appears
+asking to let **calendar-helper** — not your assistant, the helper itself —
+access your calendar.
+
+Confirm it, then open **System Settings → Privacy & Security → Calendars →
 calendar-helper → Options…** and make sure **Full Access** is selected, not
 "Add Only". Read-only access is not enough; the helper checks for full access
 at startup.
 
-There is no service to install and nothing to start beforehand. The helper is
-launched on demand as a child process of the MCP server and makes itself
-responsible for its own calendar permission, so it prompts under its own name
-even though Claude Desktop started it.
+This one dialog is the only manual step, and no package format can take it
+away. It appears once and survives updates.
 
-## Did it work?
+## Why the dialog says "calendar-helper"
 
-Ask again after granting access. It should list your calendars. If instead you
-get a permission error or no tools appear, see
-[`docs/troubleshooting.md`](./docs/troubleshooting.md).
+macOS grants calendar permission to the *responsible parent process*, not to
+the program actually asking. An AI client that declares no calendar usage in
+its bundle therefore locks out everything it starts — silently, with no
+dialog and no entry in System Settings. Several MCP calendar servers work
+around this by telling you to launch your client from a terminal.
 
-## Updating after code changes
+This one doesn't need that. The helper disclaims that inherited
+responsibility at startup and becomes its own permission identity, so macOS
+reads the usage description from *its* bundle and prompts under its own name.
+One grant then covers every client on the machine.
+
+The full story: [`docs/architecture.md`](./docs/architecture.md).
+
+## Updating
 
 ```bash
-./swift/build.sh && npm run build
+npx -y @redpop/apple-calendar-mcp@latest
 ```
 
-Then restart Claude Desktop — it loads `dist/index.js` once at startup.
-
-With a Developer ID certificate, your calendar grant survives a rebuild.
-Without one, expect a fresh permission dialog every time.
+Your calendar grant survives updates: the helper is installed to a fixed
+path, and macOS binds the grant to that path rather than to the binary's
+contents.
 
 ## Uninstalling
 
-Remove the `apple-calendar` entry from
-`~/Library/Application Support/Claude/claude_desktop_config.json` and restart
-Claude Desktop. Nothing else is installed on your system.
+Remove the `apple-calendar` entry from your client's MCP configuration and
+restart it. Then delete the helper and its permission:
 
-This does not revoke the calendar grant itself — do that under **System
-Settings → Privacy & Security → Calendars** if you want it gone too.
+```bash
+rm -rf ~/Library/Application\ Support/apple-calendar-mcp
+```
+
+The entry under **System Settings → Privacy & Security → Calendars** stays
+behind — macOS keeps those even when the binary is gone. Switch it off there
+if you want it revoked.
+
+## Building from source
+
+```bash
+git clone https://github.com/redpop/apple-calendar-mcp.git
+cd apple-calendar-mcp
+npm install && npm run build && ./swift/build.sh
+```
+
+Then point your client at `dist/index.js` with `node` instead of using `npx`.
+Without a Developer ID certificate the helper is signed ad-hoc, and macOS
+then ties the calendar grant to the exact build — expect a new permission
+dialog after every rebuild.
 
 ## Learn more
 
-- [`docs/architecture.md`](./docs/architecture.md) — how the pieces fit
-  together, and why a background service is required at all (the whole TCC
-  permissions story).
-- [`docs/tools.md`](./docs/tools.md) — full MCP tool reference: every
-  parameter, defaults, and the all-day alarm rule.
-- [`docs/cli.md`](./docs/cli.md) — the standalone `calendar-helper`
-  command-line tool, useful for testing without an MCP client.
+- [`docs/architecture.md`](./docs/architecture.md) — how the two halves fit
+  together and the whole TCC permission story
+- [`docs/tools.md`](./docs/tools.md) — every tool parameter, defaults, and
+  the all-day alarm rule
+- [`docs/cli.md`](./docs/cli.md) — the standalone `calendar-helper` command,
+  useful for testing without an MCP client
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — common errors and
-  how to fix them.
+  how to fix them
+
+## Privacy
+
+Everything runs locally. Calendar data goes from EventKit to the helper to
+the MCP server to your client, and nowhere else. There is no network code in
+this project.
 
 ## License
 

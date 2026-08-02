@@ -2,11 +2,16 @@
 
 [← Back to README](../README.md)
 
-**The log is the first place to look.** Every message from the daemon —
-started, waiting for calendar access, granted, listening, `serve` errors —
-goes to `~/Library/Logs/apple-calendar-mcp.log`, because that's what
-`launchagent/install.sh` points `StandardOutPath`/`StandardErrorPath` at.
-`tail -f` it while you install or restart the service.
+**Look at stderr first.** The helper writes its diagnostics there — access
+check, ready, errors — and the MCP server passes them through to its own
+stderr, so they end up wherever your client keeps MCP logs. For Claude
+Desktop that is `~/Library/Logs/Claude/mcp-server-apple-calendar.log`.
+
+To see the same thing without a client, run the helper directly:
+
+```bash
+printf '{"id":1,"command":"list-calendars"}\n' | ./bin/calendar-helper serve
+```
 
 **`PERMISSION_TIMEOUT` vs. `PERMISSION_DENIED` — read the log to tell them
 apart.** `serve` checks calendar access once at startup and waits up to 30
@@ -15,18 +20,23 @@ approval dialog never appeared, or appeared behind another window and
 nobody clicked it) it exits with `PERMISSION_TIMEOUT` — "no answer came." If
 you explicitly deny the dialog, or access was already denied before, it
 exits with `PERMISSION_DENIED` — "the answer was no." These need different
-fixes: a timeout usually means look for the dialog and click it (or restart
-the LaunchAgent so it asks again); a denial means go fix the grant in System
-Settings. Distinguishing the two was what made the whole responsible-process
+fixes: a timeout usually means look for the dialog and click it, then ask
+again; a denial means go fix the grant in System Settings. Distinguishing the two was what made the whole responsible-process
 issue diagnosable in the first place — don't skip reading the log just
 because both look like "it's not working."
 
 **The two grant levels (macOS 14+), and the Options… trap.** Open
 **System Settings → Privacy & Security → Calendars**. You should see an
 entry named **calendar-helper** — this is expected; older versions of this
-project showed *Terminal* or *Claude* here instead, because the grant used
-to belong to whichever app launched the helper. Now that the helper runs
-under `launchd`, it has its own entry.
+project showed *Terminal* or the client's name here instead, because the
+grant used to belong to whichever app launched the helper. The helper now
+claims its own permission identity at startup, so it gets its own entry.
+
+You may see **several** entries named `calendar-helper`. That is also
+expected: macOS tracks command-line tools per path, so a copy that ran from a
+different location once has its own row. Only the one at
+`~/Library/Application Support/apple-calendar-mcp/bin/` matters; the others
+are leftovers and cannot be removed individually.
 
 macOS 14+ distinguishes two access levels for each app in that list. **The
 on/off toggle next to the app's name does not expose this choice at all** —
@@ -58,7 +68,7 @@ no dialog at all.** Expected with ad-hoc signing — see
 path your build took:
 
 ```bash
-codesign -dv "$HOME/Library/Application Support/apple-calendar-mcp/calendar-helper"
+codesign -dv "$HOME/Library/Application Support/apple-calendar-mcp/bin/calendar-helper"
 ```
 
 `Identifier=io.github.apple-calendar-mcp.calendar-helper` is set either way.
@@ -76,21 +86,25 @@ all, even immediately after a `tccutil reset`. One easy-to-hit trap: the
 entitlements plist must contain **no XML comments** — Apple's AMFI parser
 rejects them with a syntax error, not a helpful message.
 
-**`HELPER_MISSING` from the MCP server.** The Node layer couldn't reach the
-socket *and* couldn't find a binary to spawn as a fallback. Either
-`launchagent/install.sh` was never run (or the LaunchAgent isn't loaded —
-check `launchctl print gui/$UID/io.github.apple-calendar-mcp.helper`), or,
-for the spawn fallback specifically, `./swift/build.sh` was never run and
-`bin/calendar-helper` doesn't exist in the repo. Note that even a working
-spawn fallback only helps under a parent process that already holds the
-grant (e.g. a terminal) — under Claude Desktop it will still fail with
-`PERMISSION_DENIED`, because it hits exactly the problem the LaunchAgent
-setup exists to avoid (see [`docs/architecture.md`](./architecture.md)).
+**`HELPER_MISSING` from the MCP server.** The binary isn't where the server
+expects it. When installed from npm this shouldn't happen — reinstalling the
+package restores it. When running from a clone, it means `./swift/build.sh`
+was never run and `bin/calendar-helper` doesn't exist.
+
+**`HELPER_CRASHED` on every call.** The helper starts and dies immediately.
+Run it directly (see the top of this page) to see why on stderr. A common
+cause after building from source is a binary that won't pass code signing
+checks — `codesign --verify --strict bin/calendar-helper` will say so.
+
+**The first call takes 20+ seconds, later ones are instant.** Normal. The
+first call starts the helper, which sets up EventKit and checks calendar
+access, waiting for you to answer the dialog. Everything after that is one
+JSON line through a pipe.
 
 **Claude Desktop doesn't show the tools, or your config edits keep
-disappearing.** Double-check the absolute path in
-`claude_desktop_config.json` actually points at `dist/index.js` in this
-checkout. If edits to the file keep reverting, you edited it while Claude
+disappearing.** Check the entry in `claude_desktop_config.json`: for an npm
+install the command is `npx` with `-y @redpop/apple-calendar-mcp`; for a
+clone it is `node` with an absolute path to `dist/index.js`. If edits to the file keep reverting, you edited it while Claude
 Desktop was still running — quit it first, then edit, then start it. Either
 way, a full restart (quit, not just closed the window) is required after
 any config change.

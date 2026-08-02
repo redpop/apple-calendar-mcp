@@ -38,7 +38,7 @@ const DOMAIN_PROFILES: Record<ActivityDomain, { days: number[]; from: number; to
   unrestricted: { days: [0, 1, 2, 3, 4, 5, 6], from: 0, to: 24 * 60 },
 }
 
-/** ISO 8601 mit lokalem Offset — nicht UTC, damit Claude die Zeitzone sieht. */
+/** ISO 8601 mit lokalem Offset — nicht UTC, damit das Modell die Zeitzone sieht. */
 export function toLocalISO(date: Date): string {
   const pad = (value: number): string => String(value).padStart(2, '0')
   const offsetMinutes = -date.getTimezoneOffset()

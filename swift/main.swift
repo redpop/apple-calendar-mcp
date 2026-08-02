@@ -49,7 +49,7 @@ func readPayload() -> [String: Any] {
 
 // MARK: - Datumsformate
 
-/// Ausgabeformat: ISO 8601 mit lokalem Offset, damit Claude die Zeitzone sieht.
+/// Ausgabeformat: ISO 8601 mit lokalem Offset, damit das Modell die Zeitzone sieht.
 let isoOut: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]

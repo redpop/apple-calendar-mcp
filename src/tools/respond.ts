@@ -6,7 +6,7 @@ export interface ToolResult {
 }
 
 /**
- * Einzige Stelle, an der Fehler zu Antworten werden. Claude bekommt Klartext,
+ * Einzige Stelle, an der Fehler zu Antworten werden. Das Modell bekommt Klartext,
  * niemals einen Stacktrace.
  *
  * Bewusst ohne `: Promise<ToolResult>`-Rückgabetyp-Annotation an der Funktion:

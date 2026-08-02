@@ -4,11 +4,17 @@
 
 Every command below is a standalone subcommand of `bin/calendar-helper`. The
 first four are one-shot: a payload goes in on stdin as JSON, and the result
-comes out on stdout as JSON. `serve`, covered last, is different — it's the
-long-running daemon. These are useful for verifying the helper works before
-wiring it into an MCP client, and for debugging — though under normal
-operation you won't run any of them directly, since
-`launchagent/install.sh` starts and manages `serve` for you.
+comes out on stdout as JSON. `serve`, covered last, is different — it stays
+running and answers many requests.
+
+These are useful for checking the helper works before wiring it into an MCP
+client, and for debugging. Under normal operation you never run them
+yourself: the MCP server starts `serve` on the first tool call and keeps it
+for as long as it runs.
+
+Note that the installed copy the MCP server actually uses lives at
+`~/Library/Application Support/apple-calendar-mcp/bin/calendar-helper`, not
+in `bin/` — see [`docs/architecture.md`](./architecture.md) for why.
 
 ## `check-access`
 
@@ -64,18 +70,30 @@ calendar) fails with `CALENDAR_READONLY`. See the all-day alarm rule in
 ## `serve`
 
 ```bash
-./bin/calendar-helper serve [--socket /custom/path]
+./bin/calendar-helper serve
 ```
 
-Not one-shot: runs as a long-lived daemon, listening on a Unix domain socket
-(default `~/Library/Application Support/apple-calendar-mcp/helper.sock`,
-overridable with `--socket`) and handling one JSON request per connection.
-Before it starts listening, it checks calendar access once, waiting up to 30
+Not one-shot: reads one JSON request per line from stdin and writes one JSON
+response per line to stdout, until stdin closes. This is what the MCP server
+runs.
+
+```bash
+printf '{"id":1,"command":"list-calendars"}\n' | ./bin/calendar-helper serve
+```
+
+Requests take the shape `{"id": ..., "command": ..., "payload": {...}}`,
+where `id` is optional and mirrored back. Responses are
+`{"ok": true, "result": ...}` or `{"ok": false, "error": {"code": ...,
+"message": ...}}`.
+
+Before answering anything it checks calendar access once, waiting up to 30
 seconds for a decision; if nothing arrives in that window it exits with
-`PERMISSION_TIMEOUT` rather than hanging forever with no explanation. This
-is what `launchagent/install.sh` registers as a LaunchAgent — see
-[`docs/architecture.md`](./architecture.md) for why this exists as a daemon
-at all rather than a one-shot command like the others.
+`PERMISSION_TIMEOUT` rather than hanging silently. Diagnostics go to stderr —
+stdout carries nothing but responses, since the MCP server parses it.
+
+Set `CALENDAR_HELPER_DEBUG=1` to also see a line when the process re-executes
+itself to claim its own calendar permission. See
+[`docs/architecture.md`](./architecture.md) for what that is about.
 
 ---
 
