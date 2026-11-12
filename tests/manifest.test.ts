@@ -40,6 +40,7 @@ describe('manifest.json', () => {
 
   it('links the privacy policy in the README', () => {
     expect(manifest.privacy_policies).toEqual(['https://github.com/redpop/apple-calendar-mcp#privacy-policy'])
+    expect(read('README.md')).toMatch(/^## Privacy Policy$/m)
   })
 
   it('runs on macOS with the Node versions the package accepts', () => {
