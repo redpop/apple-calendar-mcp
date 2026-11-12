@@ -160,6 +160,29 @@ describe('createStdioRunner', () => {
     expect(after.pid).not.toBe(before.pid)
   })
 
+  // Laufen zwei Versionen des Servers parallel (MCPB in Desktop, Plugin in
+  // Claude Code), ersetzt jede beim Start die installierte Kopie durch ihre
+  // eigene. Der Pfad muss deshalb vor JEDEM Start aufgeloest werden, nicht nur
+  // einmal beim Serverstart.
+  it('loest den Helper-Pfad vor jedem Start neu auf', async () => {
+    const helperPath = writeFakeHelper()
+    let resolutions = 0
+    const runner = createStdioRunner(() => {
+      resolutions++
+      return helperPath
+    }, fastTimeouts)
+    runners.push(runner)
+
+    expect(resolutions).toBe(0)
+    await runner.run('echo-pid', {})
+    await runner.run('echo-pid', {})
+    expect(resolutions).toBe(1)
+
+    await expect(runner.run('crash', {})).rejects.toBeInstanceOf(HelperError)
+    await runner.run('echo-pid', {})
+    expect(resolutions).toBe(2)
+  })
+
   it('meldet eine unlesbare Zeile als HELPER_CRASHED', async () => {
     const runner = makeRunner(writeFakeHelper())
 
