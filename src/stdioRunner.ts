@@ -56,10 +56,25 @@ interface HelperResponse {
  * als stille Vertauschung zweier Antworten.
  */
 export function createStdioRunner(
-  helperPath: string,
+  helperPath: string | (() => string),
   timeouts: StdioTimeouts = DEFAULT_TIMEOUTS,
 ): StdioHelperRunner {
   let child: ChildProcess | undefined
+  /**
+   * Pfad des laufenden (oder als naechstes zu startenden) Helpers.
+   *
+   * Als Funktion uebergeben, wird er vor JEDEM Start neu aufgeloest: Laufen
+   * zwei Versionen des Servers parallel, ersetzt jede die installierte Kopie
+   * durch ihre eigene (`ensureInstalledHelper`). Einmal beim Serverstart
+   * aufgeloest, saehe ein spaeterer Start womoeglich den Helper der anderen
+   * Version.
+   */
+  let currentPath: string | undefined
+  function pathForNextStart(): string {
+    if (child !== undefined && currentPath !== undefined) return currentPath
+    currentPath = typeof helperPath === 'function' ? helperPath() : helperPath
+    return currentPath
+  }
   let buffer = ''
   let nextId = 1
   /** Hat der AKTUELLE Prozess schon einmal geantwortet? Steuert die Frist. */
@@ -136,12 +151,12 @@ export function createStdioRunner(
     entry.reject(new HelperError(parsed.error?.code ?? 'HELPER_CRASHED', parsed.error?.message ?? 'Unbekannter Fehler'))
   }
 
-  function ensureChild(): ChildProcess {
+  function ensureChild(path: string): ChildProcess {
     if (child !== undefined) return child
 
     // stderr geht unveraendert an den Elternprozess: dort landet die Diagnose
     // des Helpers, und der MCP-Server schreibt seine Logs ohnehin auf stderr.
-    const started = spawn(helperPath, ['serve'], { stdio: ['pipe', 'pipe', 'inherit'] })
+    const started = spawn(path, ['serve'], { stdio: ['pipe', 'pipe', 'inherit'] })
     child = started
     isWarm = false
 
@@ -183,8 +198,9 @@ export function createStdioRunner(
   return {
     run(command, payload) {
       return new Promise<unknown>((resolve, reject) => {
-        if (!existsSync(helperPath)) {
-          reject(new HelperError('HELPER_MISSING', helperPath))
+        const path = pathForNextStart()
+        if (!existsSync(path)) {
+          reject(new HelperError('HELPER_MISSING', path))
           return
         }
 
@@ -210,7 +226,7 @@ export function createStdioRunner(
         }
         pending.push(entry)
 
-        const current = ensureChild()
+        const current = ensureChild(path)
         current.stdin?.write(`${JSON.stringify({ id, command, payload })}\n`)
       })
     },

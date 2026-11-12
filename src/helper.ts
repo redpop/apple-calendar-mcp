@@ -38,7 +38,12 @@ export function resolveHelperPath(): string {
  * keine eigene Anmeldung beim System mehr, um eine eigene Berechtigungs-
  * identitaet zu haben. Damit gibt es auch nichts mehr, worauf ausgewichen
  * werden koennte — und keinen Installationsschritt vor dem ersten Start.
+ *
+ * Standardmaessig wird der Pfad vor jedem Start des Helpers neu aufgeloest
+ * und die installierte Kopie dabei abgeglichen (siehe `createStdioRunner`).
  */
-export function createHelperRunner(helperPath: string = resolveHelperPath()): StdioHelperRunner {
+export function createHelperRunner(
+  helperPath: string | (() => string) = resolveHelperPath,
+): StdioHelperRunner {
   return createStdioRunner(helperPath)
 }
