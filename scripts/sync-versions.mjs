@@ -33,4 +33,4 @@ const manifest = readJson('manifest.json')
 manifest.version = version
 writeJson('manifest.json', manifest)
 
-console.error(`server.json und manifest.json auf ${version} gesetzt`)
+console.log(`server.json und manifest.json auf ${version} gesetzt`)

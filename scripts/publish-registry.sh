@@ -87,7 +87,7 @@ if [ "${1:-}" = "--fill-only" ]; then
 fi
 
 VERSION="$(node -p "require('./package.json').version")"
-node scripts/sync-versions.mjs 2>/dev/null
+node scripts/sync-versions.mjs >/dev/null
 
 # Die Registry begrenzt die Beschreibung auf 100 Zeichen und meldet das erst nach dem Hochladen.
 # shellcheck disable=SC2016 # JavaScript-Template-String, kein Shell-Ausdruck
