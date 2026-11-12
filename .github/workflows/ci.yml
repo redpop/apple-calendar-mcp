@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # Pinned; same version as release-candidate.yml and release.yml.
+  MCPB_VERSION: 2.1.2
+
 jobs:
   build:
     runs-on: macos-latest
@@ -28,6 +32,9 @@ jobs:
 
       - name: TypeScript build
         run: npm run build
+
+      - name: Validate the MCPB manifest
+        run: npx -y "@anthropic-ai/mcpb@$MCPB_VERSION" validate manifest.json
 
       # Compiles and signs the Swift CLI. It cannot be run in CI: there is no
       # calendar and no TCC permission available there.
