@@ -101,8 +101,13 @@ first call starts the helper, which sets up EventKit and checks calendar
 access, waiting for you to answer the dialog. Everything after that is one
 JSON line through a pipe.
 
-**Claude Desktop doesn't show the tools, or your config edits keep
-disappearing.** Check the entry in `claude_desktop_config.json`: for an npm
+**Claude Desktop doesn't show the tools.** With the `.mcpb`, check under
+Settings → Extensions that "Apple Calendar" is installed and enabled. If you
+also kept an `apple-calendar` entry in `claude_desktop_config.json`, remove
+one of the two; both work, but two servers offer the same tools twice.
+
+**Claude Desktop doesn't show the tools of a config entry, or your config
+edits keep disappearing.** Check the entry in `claude_desktop_config.json`: for an npm
 install the command is `npx` with `-y @redpop/apple-calendar-mcp`; for a
 clone it is `node` with an absolute path to `dist/index.js`. If edits to the file keep reverting, you edited it while Claude
 Desktop was still running — quit it first, then edit, then start it. Either

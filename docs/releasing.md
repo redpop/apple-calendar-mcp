@@ -8,7 +8,7 @@ machine. The maintainer checks a candidate and approves every run in the `releas
 A tag `v<version>` runs `.github/workflows/release.yml`. After approval in the `release`
 environment the run:
 
-1. checks that the tag matches `package.json`, is not a prerelease, that `server.json` agrees,
+1. checks that the tag matches `package.json`, is not a prerelease, that `server.json` and `manifest.json` agree,
    and that the tagged commit is on `main` (`scripts/release/check-tag.sh`);
 2. runs typecheck, vitest and the TypeScript build;
 3. fails early if a signing secret is missing (`require-env.sh`, prints `Missing secret: NAME`);
@@ -24,11 +24,15 @@ environment the run:
    runtime, calendar entitlement, the release requirement (`verify-helper.sh`, prints the CDHash);
 8. packs the npm tarball and checks the unpacked copy: helper present and executable, nothing
    else under `bin/`, valid signature, same CDHash (`verify-npm-pack.sh`);
-9. attests `calendar-helper.zip`;
-10. publishes the tarball to npm with provenance and creates the GitHub release with
+9. builds `apple-calendar-mcp-<version>.mcpb` from `dist/`, the helper and production
+   `node_modules`, and checks two unpacked copies (`unzip` and `mcpb unpack`): helper executable,
+   valid signature, same CDHash, no symlinks (`build-mcpb.sh`);
+10. attests `calendar-helper.zip` and the `.mcpb`;
+11. publishes the tarball to npm with provenance and creates the GitHub release with the `.mcpb`,
     `calendar-helper.zip` and `SHA256SUMS` (`publish.sh`; a re-run skips what is already out);
-11. publishes `server.json` to the MCP Registry (`scripts/publish-registry.sh`);
-12. runs `cleanup-keychain.sh` again as a fallback, also after a failure.
+12. publishes `server.json` to the MCP Registry with the checksum of the `.mcpb` it downloads from
+    the release, after waiting until npm serves the new version (`scripts/publish-registry.sh`);
+13. runs `cleanup-keychain.sh` again as a fallback, also after a failure.
 
 Tags with a prerelease version such as `v0.3.0-rc.1` are refused. Candidates come from the
 release candidate workflow.
@@ -37,13 +41,14 @@ release candidate workflow.
 
 `.github/workflows/release-candidate.yml` runs on `workflow_dispatch`, in the same `release`
 environment and with the same scripts. It sets the version to `<version>-rc.<run number>`
-without committing it, runs steps 2 to 9 and uploads `calendar-helper.zip` and the npm tarball as
+without committing it, runs steps 2 to 10 and uploads `calendar-helper.zip`, the `.mcpb` and the npm tarball as
 the artifact `release-candidate-<run number>` (kept 14 days). It publishes nothing.
 
 ## Cutting a release
 
 1. Dispatch the release candidate workflow on `main` and check the artifact on a Mac.
-2. `npm version <patch|minor|major>` on `main`; the `version` hook keeps `server.json` in step.
+2. `npm version <patch|minor|major>` on `main`; the `version` hook (`scripts/sync-versions.mjs`) keeps `server.json` and
+   `manifest.json` in step.
 3. `git push --follow-tags`.
 4. Approve the run in the `release` environment.
 

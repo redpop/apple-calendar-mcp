@@ -31,7 +31,9 @@ The helper escapes this by **disclaiming that responsibility at startup**. `reex
 
 Because the helper carries its own permission identity, it needs no service registration. It runs as a **long-lived child process** of the MCP server (`calendar-helper serve`), speaking NDJSON over stdin/stdout. Node never touches EventKit.
 
-It is not, however, run from where the package puts it. `src/helperInstall.ts` copies it to `~/Library/Application Support/apple-calendar-mcp/bin/calendar-helper` on first use and spawns it from there, because the TCC grant is bound to the path (see Code signing). Copying goes through a `.tmp` file and `rename()`: a running binary cannot be overwritten on macOS (ETXTBSY), and deleting the target first would give up the very path the grant hangs on. Verified end to end — replacing the installed binary with a differently-hashed build produced no new prompt.
+It is not, however, run from where the package puts it. `src/helperInstall.ts` copies it to `~/Library/Application Support/apple-calendar-mcp/bin/calendar-helper` before every helper start and spawns it from there, because the TCC grant is bound to the path (see Code signing). Copying goes through a `.tmp` file and `rename()`: a running binary cannot be overwritten on macOS (ETXTBSY), and deleting the target first would give up the very path the grant hangs on. Verified end to end — replacing the installed binary with a differently-hashed build produced no new prompt.
+
+The copy is compared and refreshed before *every* spawn, not once per server start, because the `.mcpb` in Claude Desktop and an `npx` install in Claude Code may run different versions side by side and each replaces the installed copy with its own.
 
 Consequences when working here:
 
@@ -79,6 +81,10 @@ Untested: whether ad-hoc versus Developer ID changes any of this at a *known* pa
 Hardened runtime requires `swift/calendar-helper.entitlements`. That file must contain **no XML comments** — the AMFI parser rejects them with a syntax error.
 
 `tccutil reset Calendar <bundle-id>` does not work for command-line tools (OSStatus -10814) — consistent with them not being addressed by bundle id at all. Only the blunt `tccutil reset Calendar` works, and it clears every app's calendar permission.
+
+## Distribution
+
+Three install paths share one helper path and therefore one calendar grant: the `.mcpb` attached to each GitHub release (Claude Desktop chat and Cowork), `npx -y @redpop/apple-calendar-mcp` (Claude Code and other clients), and the npm package itself. `manifest.json` describes the `.mcpb`; it has no `user_config` because the server reads no settings. `scripts/sync-versions.mjs` (the npm `version` hook) keeps `server.json` and `manifest.json` at the package version; `tests/manifest.test.ts` checks the manifest lists exactly the registered tools. The README's "Privacy Policy" section is linked from the manifest; keep its heading, the anchor is the URL.
 
 ## Scope
 
