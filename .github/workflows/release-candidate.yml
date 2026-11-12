@@ -22,6 +22,8 @@ env:
   # Erzwingt die Developer ID: Fehlt sie im Schluesselbund, scheitert codesign in swift/build.sh,
   # statt still ad hoc zu signieren. Ad hoc banden die Kalenderberechtigung an den Code-Hash.
   CODESIGN_IDENTITY: 'Developer ID Application: Martin Alker (4KTGF63CD2)'
+  # Gepinnt, gleiche Version wie in ci.yml und dem jeweils anderen Release-Workflow.
+  MCPB_VERSION: 2.1.2
 
 jobs:
   candidate:
@@ -121,10 +123,18 @@ jobs:
           TARBALL="$(scripts/release/verify-npm-pack.sh "${{ steps.helper.outputs.cdhash }}")"
           echo "tarball=$TARBALL" >>"$GITHUB_OUTPUT"
 
+      - name: Build and verify MCPB
+        id: mcpb
+        run: |
+          set -euo pipefail
+          MCPB="$(scripts/release/build-mcpb.sh "${{ steps.helper.outputs.cdhash }}")"
+          echo "path=$MCPB" >>"$GITHUB_OUTPUT"
+
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             ${{ runner.temp }}/calendar-helper.zip
+            ${{ steps.mcpb.outputs.path }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -132,6 +142,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/calendar-helper.zip
+            ${{ steps.mcpb.outputs.path }}
             ${{ steps.npm.outputs.tarball }}
 
       # Rueckfall, falls ein Schritt davor gescheitert ist.
