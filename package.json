@@ -37,7 +37,9 @@
     "bin",
     "swift",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "manifest.json",
+    "icon.png"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",

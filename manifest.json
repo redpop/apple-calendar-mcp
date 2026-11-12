@@ -1,0 +1,76 @@
+{
+  "manifest_version": "0.3",
+  "name": "apple-calendar-mcp",
+  "display_name": "Apple Calendar",
+  "version": "0.2.1",
+  "description": "Read, create, update and delete Apple Calendar events on macOS, and find free time.",
+  "long_description": "An MCP server for Apple Calendar. A notarized helper talks to EventKit and is the only process that needs calendar access; macOS asks for it once, under the name calendar-helper, and the grant survives updates. Recurring events come back as individual occurrences. find_free_time returns open gaps for work or personal time, with optional buffers around meetings. create_event, update_event and delete_event change your calendar; there is no undo.",
+  "author": {
+    "name": "Martin Alker",
+    "url": "https://github.com/redpop"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/redpop/apple-calendar-mcp"
+  },
+  "homepage": "https://github.com/redpop/apple-calendar-mcp",
+  "documentation": "https://github.com/redpop/apple-calendar-mcp#readme",
+  "support": "https://github.com/redpop/apple-calendar-mcp/issues",
+  "license": "MIT",
+  "privacy_policies": [
+    "https://github.com/redpop/apple-calendar-mcp#privacy-policy"
+  ],
+  "icon": "icon.png",
+  "keywords": [
+    "calendar",
+    "apple-calendar",
+    "eventkit",
+    "macos",
+    "scheduling",
+    "free-time"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "list_calendars",
+      "description": "Lists the calendars configured in macOS Calendar, with id, title, type and whether they can be changed."
+    },
+    {
+      "name": "list_events",
+      "description": "Reads events in a date range, with recurring events as individual occurrences and optional text search."
+    },
+    {
+      "name": "create_event",
+      "description": "Creates an event with title, time or all-day dates, location, notes and alarms."
+    },
+    {
+      "name": "update_event",
+      "description": "Changes an existing event; for a recurring event, one occurrence or that one and all later ones."
+    },
+    {
+      "name": "delete_event",
+      "description": "Deletes an event; for a recurring event, one occurrence or that one and all later ones. There is no undo."
+    },
+    {
+      "name": "find_free_time",
+      "description": "Finds free slots of a given length for work or personal time, optionally with buffers around meetings."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ],
+    "runtimes": {
+      "node": ">=20"
+    }
+  }
+}
