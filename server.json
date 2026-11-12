@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.redpop/apple-calendar-mcp",
   "title": "Apple Calendar",
-  "description": "Read and create Apple Calendar events on macOS, and find free time across calendars.",
+  "description": "Read, create, update and delete Apple Calendar events on macOS, and find free time.",
   "repository": {
     "url": "https://github.com/redpop/apple-calendar-mcp",
     "source": "github"
