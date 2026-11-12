@@ -31,7 +31,7 @@ for file in "${VERSION_FILES[@]}"; do
   fi
 done
 
-node scripts/sync-versions.mjs 2>/dev/null
+node scripts/sync-versions.mjs >/dev/null
 # Mit --untracked-files=normal: auch eine Datei, die das Skript erst neu angelegt hat, ist eine Abweichung.
 CHANGED="$(/usr/bin/git status --porcelain --untracked-files=normal)"
 if [ -n "$CHANGED" ]; then
