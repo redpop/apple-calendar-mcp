@@ -65,6 +65,8 @@ Tool `annotations` are functional: `readOnlyHint: true` is what lets a host run 
 
 `swift/build.sh` uses a Developer ID certificate when one exists, otherwise ad-hoc. This is not cosmetic: ad-hoc binds the TCC grant to the code hash, so every rebuild silently invalidates it and macOS then refuses without showing a dialog. A Developer ID signature is what makes a grant survive rebuilds at all.
 
+Developer ID signing happens only in CI (`release.yml`, `release-candidate.yml`, see `docs/releasing.md`), where `CODESIGN_IDENTITY` forces it so a missing certificate fails instead of falling back to ad-hoc. A local machine may have a Developer ID in its keychain that `build.sh` would pick on its own; agents build with `CODESIGN_IDENTITY="Apple Development: Martin Alker (6GT7DQZYME)" ./swift/build.sh` instead. Notarization uses the App Store Connect API key; the helper is a bare binary and cannot be stapled.
+
 **What the grant binds to, measured in ACM-5:**
 
 - **The code hash does not matter.** `bin/calendar-helper` was rebuilt twice after the grant (`9d2ab825…` → `f9fefabe…`) and kept working without a new prompt. Rebuilding in place is free.

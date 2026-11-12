@@ -1,0 +1,140 @@
+name: Release candidate
+
+# Baut dieselben Artefakte wie release.yml, signiert und notarisiert, veroeffentlicht aber nichts:
+# kein npm publish, kein GitHub-Release, kein Registry-Eintrag. Die Version bekommt den Zusatz
+# -rc.<run_number>; zwei Kandidaten nacheinander pruefen das Update von n auf n+1.
+on:
+  workflow_dispatch:
+
+# Eigene Gruppe: GitHub haelt je Gruppe nur einen wartenden Lauf und bricht den aelteren ab.
+# Ein Kandidat soll keinen wartenden Release verdraengen.
+concurrency:
+  group: release-candidate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # Attestation
+  attestations: write
+
+env:
+  APPLE_TEAM_ID: 4KTGF63CD2
+  # Erzwingt die Developer ID: Fehlt sie im Schluesselbund, scheitert codesign in swift/build.sh,
+  # statt still ad hoc zu signieren. Ad hoc banden die Kalenderberechtigung an den Code-Hash.
+  CODESIGN_IDENTITY: 'Developer ID Application: Martin Alker (4KTGF63CD2)'
+
+jobs:
+  candidate:
+    # macos-14 wurde am 2026-11-02 abgeschaltet (ACM-11). Das Deployment-Target 14.0 setzt
+    # swift/build.sh, unabhaengig vom Runner.
+    runs-on: macos-15
+    # Erst Martins Freigabe in dieser Environment gibt die Signing-Secrets frei (ACM-10).
+    environment: release
+    # Grosszuegig ueber Build, Tests und Notarisierung (--timeout 30m).
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Kein Schreib-Token in .git/config fuer die spaeteren Schritte; gh bekommt GH_TOKEN gezielt.
+          persist-credentials: false
+
+      # Neueste Nicht-Beta-Version von Xcode 16, wie in apple-mail-mcp.
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          XCODE="$(/bin/ls -d /Applications/Xcode_16*.app 2>/dev/null | /usr/bin/grep -vi beta | /usr/bin/sort -V | /usr/bin/tail -n 1 || true)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::No non-beta Xcode 16 found under /Applications."
+            exit 1
+          fi
+          /usr/bin/sudo /usr/bin/xcode-select -s "$XCODE"
+          swift --version
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # Vor dem Build: die Version steckt danach in dist/ und im Tarball.
+      - name: Set candidate version
+        run: |
+          set -euo pipefail
+          BASE="$(node -p "require('./package.json').version")"
+          npm version --no-git-tag-version "$BASE-rc.$GITHUB_RUN_NUMBER"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+        env:
+          TZ: Europe/Berlin
+
+      - name: TypeScript build
+        run: npm run build
+
+      # Vor Build und Notarisierung, damit ein fehlendes Secret nicht erst nach Minuten auffaellt.
+      - name: Check secrets
+        run: scripts/release/require-env.sh APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+
+      - name: Import signing certificate
+        run: scripts/release/import-signing.sh
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Build helper (Developer ID)
+        run: npm run build:helper
+
+      # Gleich nach dem Signieren: danach laeuft Fremdcode (npm, Attestation, mcp-publisher), der die
+      # Developer-ID-Identitaet nicht mehr erreichen soll. Notarisieren braucht den Schluesselbund nicht.
+      - name: Remove keychain after signing
+        run: scripts/release/cleanup-keychain.sh
+
+      - name: Notarize
+        run: scripts/release/notarize.sh bin/calendar-helper "$RUNNER_TEMP/calendar-helper.zip"
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+
+      - name: Verify helper
+        id: helper
+        run: |
+          set -euo pipefail
+          CDHASH="$(scripts/release/verify-helper.sh bin/calendar-helper)"
+          echo "cdhash=$CDHASH" >>"$GITHUB_OUTPUT"
+
+      - name: Verify npm package
+        id: npm
+        run: |
+          set -euo pipefail
+          TARBALL="$(scripts/release/verify-npm-pack.sh "${{ steps.helper.outputs.cdhash }}")"
+          echo "tarball=$TARBALL" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/calendar-helper.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate-${{ github.run_number }}
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/calendar-helper.zip
+            ${{ steps.npm.outputs.tarball }}
+
+      # Rueckfall, falls ein Schritt davor gescheitert ist.
+      - name: Remove keychain
+        if: always()
+        run: scripts/release/cleanup-keychain.sh

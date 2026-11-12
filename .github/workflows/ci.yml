@@ -34,6 +34,19 @@ jobs:
       - name: Build Swift helper
         run: npm run build:helper
 
+      # Without a Developer ID the helper is signed ad hoc here. The release check must reject
+      # exactly that build; a verify script that passes it would let an ad-hoc helper ship.
+      - name: Release check rejects an ad-hoc helper
+        run: |
+          set -euo pipefail
+          if scripts/release/verify-helper.sh bin/calendar-helper; then
+            echo "::error::verify-helper.sh accepted an ad-hoc signed helper."
+            exit 1
+          fi
+
+      - name: Release scripts parse
+        run: for f in scripts/release/*.sh; do bash -n "$f"; done
+
       # A package that installs cleanly but contains no binary fails only at
       # the user's end. The release workflow asserts this too, but by then a
       # tag has been pushed and signing secrets are in play — better to fail a
