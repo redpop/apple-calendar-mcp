@@ -7,21 +7,21 @@
     "url": "https://github.com/redpop/apple-calendar-mcp",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@redpop/apple-calendar-mcp",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "transport": {
         "type": "stdio"
       }
     },
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/redpop/apple-calendar-mcp/releases/download/v0.2.1/apple-calendar-mcp-0.2.1.mcpb",
-      "version": "0.2.1",
+      "identifier": "https://github.com/redpop/apple-calendar-mcp/releases/download/v0.3.0/apple-calendar-mcp-0.3.0.mcpb",
+      "version": "0.3.0",
       "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "transport": {
         "type": "stdio"
