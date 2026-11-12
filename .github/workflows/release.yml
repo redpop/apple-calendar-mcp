@@ -1,6 +1,7 @@
 name: Release
 
-# Ein Tag v* baut, signiert, notarisiert und veroeffentlicht. Der Job laeuft in der Environment
+# Ein Tag v* baut, signiert, notarisiert und veroeffentlicht: npm-Paket, GitHub-Release mit .mcpb,
+# calendar-helper.zip und SHA256SUMS, MCP-Registry-Eintrag. Der Job laeuft in der Environment
 # "release": erst Martins Freigabe dort gibt die Signing-Secrets frei (ACM-10).
 # Die Schritte rufen scripts/release/*.sh, dieselben wie release-candidate.yml.
 on:
@@ -23,6 +24,8 @@ env:
   # Erzwingt die Developer ID: Fehlt sie im Schluesselbund, scheitert codesign in swift/build.sh,
   # statt still ad hoc zu signieren. Ad hoc banden die Kalenderberechtigung an den Code-Hash.
   CODESIGN_IDENTITY: 'Developer ID Application: Martin Alker (4KTGF63CD2)'
+  # Gepinnt, gleiche Version wie in ci.yml und dem jeweils anderen Release-Workflow.
+  MCPB_VERSION: 2.1.2
 
 jobs:
   release:
@@ -120,21 +123,33 @@ jobs:
           TARBALL="$(scripts/release/verify-npm-pack.sh "${{ steps.helper.outputs.cdhash }}")"
           echo "tarball=$TARBALL" >>"$GITHUB_OUTPUT"
 
+      - name: Build and verify MCPB
+        id: mcpb
+        run: |
+          set -euo pipefail
+          MCPB="$(scripts/release/build-mcpb.sh "${{ steps.helper.outputs.cdhash }}")"
+          echo "path=$MCPB" >>"$GITHUB_OUTPUT"
+
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             ${{ runner.temp }}/calendar-helper.zip
+            ${{ steps.mcpb.outputs.path }}
 
       # Ohne Token: npm erkennt die OIDC-Umgebung von GitHub Actions selbst (Trusted Publisher auf
       # npmjs.com, dieses Repository, diese Workflow-Datei, id-token: write oben).
       - name: Publish to npm and GitHub
-        run: scripts/release/publish.sh "${{ steps.npm.outputs.tarball }}" "$RUNNER_TEMP/calendar-helper.zip"
+        run: scripts/release/publish.sh "${{ steps.npm.outputs.tarball }}" "${{ steps.mcpb.outputs.path }}" "$RUNNER_TEMP/calendar-helper.zip"
         env:
           GH_TOKEN: ${{ github.token }}
 
       # Zuletzt: scheitert die Registry, sind npm und Release trotzdem draussen; registry.yml holt nach.
+      # Ohne Pfad: Die Pruefsumme kommt vom veroeffentlichten Asset. Ein Re-Run baut die .mcpb neu,
+      # und deren Bytes unterscheiden sich von der, die im Release liegt.
       - name: Publish to the MCP Registry
         run: bash scripts/publish-registry.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # Rueckfall, falls ein Schritt davor gescheitert ist.
       - name: Remove keychain

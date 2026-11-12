@@ -37,11 +37,13 @@
     "bin",
     "swift",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "manifest.json",
+    "icon.png"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "version": "node scripts/sync-server-json.mjs && git add server.json",
+    "version": "node scripts/sync-versions.mjs && git add server.json manifest.json",
     "build:helper": "bash swift/build.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
