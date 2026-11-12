@@ -83,9 +83,21 @@ the `.mcpb` and `calendar-helper.zip`.
 <details open>
 <summary><strong>Claude Code</strong></summary>
 
+As a plugin, which follows each release after seven days:
+
+```
+/plugin install apple-calendar-mcp --marketplace redpop/apple-calendar-mcp
+```
+
+Or directly, always at the newest version:
+
 ```bash
 claude mcp add apple-calendar -- npx -y @redpop/apple-calendar-mcp
 ```
+
+The plugin works only in Claude Code. Cowork starts a plugin's local server
+inside its Linux virtual machine, away from Apple Calendar, and the Claude
+desktop chat ignores local servers from plugins. Use the `.mcpb` for both.
 
 </details>
 
@@ -145,7 +157,9 @@ The full story: [`docs/architecture.md`](./docs/architecture.md).
 ## Updating
 
 With the `.mcpb`, open the bundle of the new release; Claude Desktop keeps
-the extension enabled. With `npx` and no version in the command, the next
+the extension enabled. The Claude Code plugin moves to a new release
+seven days after it is on npm, so an npm release cooldown of up to seven days
+does not block it. With `npx` and no version in the command, the next
 client start may pick up the new version; to fetch it right away:
 
 ```bash

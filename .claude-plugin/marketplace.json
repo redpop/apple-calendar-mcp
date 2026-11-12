@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "apple-calendar-mcp",
+  "description": "Apple Calendar MCP: read, create, update and delete Apple Calendar events on macOS, and find free time.",
+  "owner": {
+    "name": "Martin Alker",
+    "url": "https://github.com/redpop"
+  },
+  "plugins": [
+    {
+      "name": "apple-calendar-mcp",
+      "source": "./plugin",
+      "category": "productivity"
+    }
+  ]
+}

@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # check-tag.sh braucht origin/main
+          fetch-depth: 0 # check-tag.sh braucht origin/main, tests/plugin.test.ts die Tags
           # Kein Schreib-Token in .git/config fuer die spaeteren Schritte; gh bekommt GH_TOKEN gezielt.
           persist-credentials: false
 
