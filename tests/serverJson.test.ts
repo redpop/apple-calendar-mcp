@@ -24,10 +24,20 @@ interface ServerManifest {
   description: string
   version: string
   repository: { url: string; source: string }
-  packages: { registryType: string; registryBaseUrl: string; identifier: string; version: string; transport: { type: string } }[]
+  packages: {
+    registryType: string
+    registryBaseUrl?: string
+    identifier: string
+    version: string
+    fileSha256?: string
+    transport: { type: string }
+  }[]
 }
 
 const server = readJson('server.json') as unknown as ServerManifest
+const npmEntry = server.packages.find((entry) => entry.registryType === 'npm')
+const mcpbEntry = server.packages.find((entry) => entry.registryType === 'mcpb')
+const manifest = readJson('manifest.json') as unknown as { version: string }
 const pkg = readJson('package.json') as unknown as { name: string; version: string; mcpName: string }
 
 describe('server.json', () => {
@@ -49,8 +59,18 @@ describe('server.json', () => {
   })
 
   it('verweist auf genau das npm-Paket, das hier gebaut wird', () => {
-    expect(server.packages).toHaveLength(1)
-    expect(server.packages[0]?.identifier).toBe(pkg.name)
+    expect(server.packages).toHaveLength(2)
+    expect(npmEntry?.identifier).toBe(pkg.name)
+  })
+
+  // Die Pruefsumme kennt erst der Release-Lauf: publish-registry.sh setzt sie
+  // in einer Kopie ein. Im Repository steht ein Platzhalter.
+  it('verweist auf die .mcpb am GitHub-Release dieser Version', () => {
+    expect(mcpbEntry?.identifier).toBe(
+      `https://github.com/redpop/apple-calendar-mcp/releases/download/v${pkg.version}/apple-calendar-mcp-${pkg.version}.mcpb`,
+    )
+    expect(mcpbEntry?.fileSha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(mcpbEntry?.transport.type).toBe('stdio')
   })
 
   it('haelt die Versionen mit package.json im Gleichklang', () => {
@@ -58,18 +78,18 @@ describe('server.json', () => {
     // im Repository, ist der Diff nach einem Lauf leer und man sieht sofort,
     // welche Version eingetragen wurde.
     expect(server.version).toBe(pkg.version)
-    expect(server.packages[0]?.version).toBe(pkg.version)
+    for (const entry of server.packages) expect(entry.version).toBe(pkg.version)
+    expect(manifest.version).toBe(pkg.version)
   })
 
   it('nutzt eine von der Registry zugelassene Paketquelle', () => {
     // Nur bestimmte oeffentliche Registries sind erlaubt; Spiegel und
     // private Registries weist die offizielle Registry zurueck.
-    expect(server.packages[0]?.registryType).toBe('npm')
-    expect(server.packages[0]?.registryBaseUrl).toBe('https://registry.npmjs.org')
+    expect(npmEntry?.registryBaseUrl).toBe('https://registry.npmjs.org')
   })
 
   it('deklariert stdio als Transport', () => {
-    expect(server.packages[0]?.transport.type).toBe('stdio')
+    expect(npmEntry?.transport.type).toBe('stdio')
   })
 
   it('zeigt auf das richtige Repository', () => {
