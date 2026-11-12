@@ -29,5 +29,9 @@ jobs:
       # Die Version stammt aus package.json auf dem Stand, auf dem dieser
       # Workflow laeuft. Fuer eine aeltere Version den passenden Tag als
       # Referenz waehlen.
+      # Ohne Pfad laedt das Skript die .mcpb vom GitHub-Release dieser Version,
+      # um ihre Pruefsumme einzutragen; dafuer braucht gh das Token.
       - name: In der MCP Registry eintragen
         run: bash scripts/publish-registry.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

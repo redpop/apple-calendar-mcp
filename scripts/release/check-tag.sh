@@ -23,7 +23,7 @@ case "$VERSION" in
     exit 1 ;;
 esac
 
-VERSION_FILES=(server.json)
+VERSION_FILES=(server.json manifest.json)
 for file in "${VERSION_FILES[@]}"; do
   if [ ! -e "$file" ]; then
     echo "check-tag: version file $file is missing." >&2
@@ -31,7 +31,7 @@ for file in "${VERSION_FILES[@]}"; do
   fi
 done
 
-node scripts/sync-server-json.mjs >/dev/null
+node scripts/sync-versions.mjs 2>/dev/null
 # Mit --untracked-files=normal: auch eine Datei, die das Skript erst neu angelegt hat, ist eine Abweichung.
 CHANGED="$(/usr/bin/git status --porcelain --untracked-files=normal)"
 if [ -n "$CHANGED" ]; then

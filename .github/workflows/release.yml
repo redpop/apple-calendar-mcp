@@ -133,8 +133,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # Zuletzt: scheitert die Registry, sind npm und Release trotzdem draussen; registry.yml holt nach.
+      # Ohne Pfad: Die Pruefsumme kommt vom veroeffentlichten Asset. Ein Re-Run baut die .mcpb neu,
+      # und deren Bytes unterscheiden sich von der, die im Release liegt.
       - name: Publish to the MCP Registry
         run: bash scripts/publish-registry.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # Rueckfall, falls ein Schritt davor gescheitert ist.
       - name: Remove keychain
