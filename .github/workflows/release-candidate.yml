@@ -38,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          fetch-depth: 0 # tests/plugin.test.ts liest manifest.json am Tag der Plugin-Version
           # Kein Schreib-Token in .git/config fuer die spaeteren Schritte; gh bekommt GH_TOKEN gezielt.
           persist-credentials: false
 

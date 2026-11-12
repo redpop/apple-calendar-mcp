@@ -14,6 +14,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # tests/plugin.test.ts reads manifest.json at the tag of the plugin's version
 
       - uses: actions/setup-node@v5
         with:

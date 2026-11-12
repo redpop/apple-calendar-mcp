@@ -1,0 +1,83 @@
+name: Plugin pin
+
+# Hebt den npx-Pin des Plugins auf die hoechste npm-Version, die mindestens min_days alt ist, und
+# oeffnet dafuer einen PR. Hintergrund in scripts/plugin-pin.mjs: ein npm-Cooldown beim Nutzer
+# lehnt frische Versionen ab, und npx faellt nicht auf eine aeltere zurueck.
+# Notfall (Sicherheitsfix): von Hand mit min_days 0 ausloesen.
+# Braucht die Repository-Einstellung "Allow GitHub Actions to create and approve pull requests".
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+    inputs:
+      min_days:
+        description: Minimum age of the npm version in days (0 pins the newest release at once)
+        default: '7'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: plugin-pin
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # apply liest manifest.json am Tag der neuen Version
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Find the next pin
+        id: next
+        env:
+          MIN_DAYS: ${{ inputs.min_days || '7' }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node scripts/plugin-pin.mjs next --min-days "$MIN_DAYS")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -z "$VERSION" ]; then echo "Nothing to pin."; exit 0; fi
+          BRANCH="plugin-pin/v$VERSION"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "Branch $BRANCH exists already; its PR is open or was closed on purpose."
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pin and test
+        if: steps.next.outputs.version != ''
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/plugin-pin.mjs apply "$VERSION"
+          npm ci
+          # PRs mit GITHUB_TOKEN loesen ci.yml nicht aus; die Plugin-Pruefungen laufen deshalb hier.
+          npx vitest run tests/plugin.test.ts
+
+      - name: Open the PR
+        if: steps.next.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          BRANCH: ${{ steps.next.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -am "Pin the plugin to $VERSION"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" --title "Pin the plugin to $VERSION" --body "$(cat <<EOF
+          Pins \`plugin/.claude-plugin/plugin.json\` to \`@redpop/apple-calendar-mcp@$VERSION\`, with the environment and settings of \`manifest.json\` at \`v$VERSION\`. Opened by \`plugin-pin.yml\` once the version was old enough for an npm release cooldown.
+
+          \`tests/plugin.test.ts\` passed in the workflow run. A PR opened with the workflow token does not start \`ci.yml\`; close and reopen it to run the full CI.
+          EOF
+          )"

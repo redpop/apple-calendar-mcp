@@ -1,0 +1,33 @@
+{
+  "name": "apple-calendar-mcp",
+  "displayName": "Apple Calendar MCP",
+  "version": "0.3.0",
+  "description": "Read, create, update and delete Apple Calendar events on macOS, and find free time. Calendar access goes to a small signed helper, not to Claude.",
+  "author": {
+    "name": "Martin Alker",
+    "url": "https://github.com/redpop"
+  },
+  "homepage": "https://github.com/redpop/apple-calendar-mcp#readme",
+  "repository": "https://github.com/redpop/apple-calendar-mcp",
+  "license": "MIT",
+  "keywords": [
+    "calendar",
+    "apple-calendar",
+    "macos",
+    "eventkit",
+    "scheduling"
+  ],
+  "icon": "./icon.png",
+  "documentationUrl": "https://github.com/redpop/apple-calendar-mcp#readme",
+  "supportUrl": "https://github.com/redpop/apple-calendar-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/redpop/apple-calendar-mcp#privacy-policy",
+  "mcpServers": {
+    "apple-calendar": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@redpop/apple-calendar-mcp@0.3.0"
+      ]
+    }
+  }
+}
