@@ -18,6 +18,8 @@ instead; see [Setup](#setup).
 No Xcode, no Swift toolchain, no repository clone. The signed helper binary
 ships inside the package.
 
+Background and design decisions: [Apple Calendar MCP](https://martin-alker.de/blog/apple-calendar-mcp).
+
 ## What it does
 
 Most calendar integrations answer *what is on my calendar*. This one also
