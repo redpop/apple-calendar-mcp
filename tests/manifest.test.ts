@@ -16,6 +16,28 @@ function registeredToolNames(): string[] {
   return names
 }
 
+function registeredToolDescriptions(): Record<string, string> {
+  const descriptions: Record<string, string> = {}
+  const server = {
+    registerTool: (name: string, config: { description: string }) => {
+      descriptions[name] = config.description
+    },
+  } as unknown as McpServer
+  const runner: HelperRunner = { run: () => Promise.resolve(undefined) }
+  registerTools(server, runner)
+  return descriptions
+}
+
+describe('tool descriptions', () => {
+  // update_event und delete_event gibt es seit ACM-7; eine Beschreibung, die
+  // das Gegenteil behauptet, fuehrt das Modell und die Pruefer in die Irre.
+  it('do not claim that changing or deleting events is impossible', () => {
+    for (const [name, description] of Object.entries(registeredToolDescriptions())) {
+      expect(description, name).not.toMatch(/currently possible|cannot (be )?(modif|chang|delet)/i)
+    }
+  })
+})
+
 describe('manifest.json', () => {
   it('carries the package version', () => {
     expect(manifest.version).toBe(pkg.version)

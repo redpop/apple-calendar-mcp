@@ -8,7 +8,7 @@ export function registerCreateEvent(server: McpServer, runner: HelperRunner): vo
     'create_event',
     {
       description:
-        'Creates a new event. Without calendarId the default calendar is used. Read-only calendars are rejected. For all-day events, alarms are floored to whole days and placed at 09:00, matching Calendar.app. Never modifies or deletes existing events — neither is currently possible.',
+        'Creates a new event. Without calendarId the default calendar is used. Read-only calendars are rejected. For all-day events, alarms are floored to whole days and placed at 09:00, matching Calendar.app.',
       inputSchema: createEventInput,
       annotations: {
         title: 'Create event',
