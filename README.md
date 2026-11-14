@@ -4,6 +4,8 @@ An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 read, create, change and delete events in Apple Calendar — and work out
 when you actually have time.
 
+Background and design decisions: [the write-up on martin-alker.de](https://martin-alker.de/blog/apple-calendar-mcp).
+
 **macOS only.** It talks to EventKit, Apple's own calendar framework, which
 has no cross-platform equivalent.
 
